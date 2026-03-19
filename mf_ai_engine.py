@@ -997,81 +997,226 @@ def call_claude_api(prompt: str) -> Optional[dict]:
 
 def call_gemini_api(prompt: str) -> Optional[dict]:
     """
-    Calls Gemini 2.0 Flash with retry logic for rate limits.
-    Free tier: 15 RPM, 1M TPM. Our prompt is large so we retry with backoff.
+    Splits the large prompt into two focused calls to stay within
+    Gemini free tier token limits, then merges both responses.
+    Call 1: Portfolio quality + fund ratings + returns + costs
+    Call 2: Strategy + step-up + projections + actions + telegram
     """
     import time
+
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         return None
 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
 
-    payload = {
-        "contents": [{
-            "parts": [{"text": prompt}]
-        }],
-        "generationConfig": {
-            "temperature": 0.2,
-            "maxOutputTokens": 8192,
-        },
-        "systemInstruction": {
-            "parts": [{"text": (
-                "You are a brutally honest financial analyst. "
-                "Return ONLY valid JSON. No markdown fences, no prose. "
-                "Every monetary figure in Indian Rupees. "
-                "Your job is wealth maximisation, not comfort."
-            )}]
-        }
-    }
+    system_instruction = (
+        "You are a brutally honest financial analyst. "
+        "Return ONLY valid JSON. No markdown fences, no prose. "
+        "Every monetary figure in Indian Rupees. "
+        "Your job is wealth maximisation, not comfort."
+    )
 
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            print(f"      Gemini attempt {attempt + 1}/{max_retries}...")
-            resp = requests.post(url, json=payload, timeout=120)
+    def call_gemini(sub_prompt: str, attempt_label: str) -> Optional[str]:
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                print(f"      Gemini {attempt_label} attempt {attempt+1}/{max_retries}...")
+                resp = requests.post(url, json={
+                    "contents": [{"parts": [{"text": sub_prompt}]}],
+                    "generationConfig": {"temperature": 0.2, "maxOutputTokens": 4096},
+                    "systemInstruction": {"parts": [{"text": system_instruction}]}
+                }, timeout=120)
 
-            if resp.status_code == 429:
-                wait = 30 * (attempt + 1)  # 30s, 60s, 90s
-                print(f"      Rate limit hit — waiting {wait}s before retry...")
-                time.sleep(wait)
-                continue
+                if resp.status_code == 429:
+                    wait = 45 * (attempt + 1)
+                    print(f"      Rate limit — waiting {wait}s...")
+                    time.sleep(wait)
+                    continue
 
-            resp.raise_for_status()
-            content = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+                resp.raise_for_status()
+                content = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
 
-            # Strip markdown fences if present
-            if "```" in content:
-                parts = content.split("```")
-                for part in parts:
-                    if part.startswith("json"):
-                        content = part[4:].strip()
-                        break
-                    elif "{" in part:
-                        content = part.strip()
-                        break
+                # Strip markdown fences
+                if "```" in content:
+                    for part in content.split("```"):
+                        if part.startswith("json"):
+                            content = part[4:].strip()
+                            break
+                        elif "{" in part:
+                            content = part.strip()
+                            break
 
-            # Find JSON object boundaries
-            start = content.find("{")
-            end = content.rfind("}") + 1
-            if start != -1 and end > start:
-                content = content[start:end]
+                # Extract JSON boundaries
+                start = content.find("{")
+                end = content.rfind("}") + 1
+                if start != -1 and end > start:
+                    return content[start:end]
 
-            return json.loads(content)
+            except Exception as e:
+                print(f"      [WARN] {attempt_label} attempt {attempt+1} failed: {e}")
+                if attempt < max_retries - 1:
+                    time.sleep(30)
+        return None
 
-        except json.JSONDecodeError as e:
-            print(f"      [WARN] JSON parse failed attempt {attempt+1}: {e}")
-            if attempt < max_retries - 1:
-                time.sleep(20)
-            continue
-        except Exception as e:
-            print(f"      [ERROR] Gemini attempt {attempt+1} failed: {e}")
-            if attempt < max_retries - 1:
-                time.sleep(20)
-            continue
+    # ── Extract context block from full prompt (between first === and OUTPUT FORMAT)
+    context_start = prompt.find("INVESTOR PROFILE")
+    context_end = prompt.find("OUTPUT FORMAT")
+    context_block = prompt[context_start:context_end].strip() if context_start != -1 else prompt[:3000]
 
-    print("[ERROR] All Gemini retries exhausted")
-    return None
+    today = datetime.date.today().isoformat()
+
+    # ── CALL 1: Portfolio analysis + fund ratings + returns + costs
+    prompt_1 = f"""
+You are a brutally honest financial analyst. Analyse this investor's mutual fund portfolio.
+
+{context_block[:4000]}
+
+Return ONLY this JSON structure — no prose, no markdown:
+
+{{
+  "report_date": "{today}",
+  "master_score": <float 0-10>,
+  "master_score_reasoning": "<2 sentence honest summary>",
+  "pillar_scores": {{
+    "portfolio_quality": <float>,
+    "cost_intelligence": <float>,
+    "portfolio_construction": <float>,
+    "personal_risk": <float>,
+    "behaviour_strategy": <float>
+  }},
+  "fund_ratings": [
+    {{
+      "fund_name": "<name>",
+      "score": <float 0-10>,
+      "verdict": "HOLD or WATCH or SWITCH or EXIT",
+      "1yr_cagr_pct": <float or null>,
+      "3yr_cagr_pct": <float or null>,
+      "alpha_vs_category": "<positive/negative/neutral>",
+      "expense_ratio_verdict": "<cheap/fair/expensive>",
+      "manager_risk": "<low/medium/high>",
+      "exit_cost_inr": <float>,
+      "net_switch_benefit_inr": <float or null>,
+      "key_finding": "<one brutal honest sentence>",
+      "action": "<specific action in plain language>"
+    }}
+  ],
+  "returns_analysis": {{
+    "portfolio_xirr_pct": <float>,
+    "real_return_post_inflation_pct": <float>,
+    "total_invested_inr": <float>,
+    "current_value_inr": <float>,
+    "absolute_gain_inr": <float>,
+    "vs_nifty50_pct": <float>,
+    "vs_fd_pct": <float>,
+    "sip_efficiency_score": <float 0-10>
+  }},
+  "cost_summary": {{
+    "total_annual_expense_drag_inr": <float>,
+    "regular_plan_annual_loss_inr": <float>,
+    "15yr_compounding_loss_from_regular_plan_inr": <float>,
+    "recommended_cost_actions": ["<action1>", "<action2>"]
+  }},
+  "brutal_honesty_block": [
+    "<most important uncomfortable truth>",
+    "<second finding>",
+    "<third finding>",
+    "<fourth finding>"
+  ]
+}}
+"""
+
+    # ── CALL 2: Strategy + projections + actions + telegram summary
+    prompt_2 = f"""
+You are a brutally honest financial analyst for this investor:
+- Age 34, Bangalore, Technical Manager EV Charging + Thermal Systems
+- Monthly salary Rs 1,40,000 | Home loan EMI Rs 60,000 (241 months left at 8.5%)
+- Monthly SIP Rs 20,000 | Emergency fund Rs 3.5L at 7% savings account
+- Free cash Rs 60,000/month | Investment horizon 15 years (target 2041)
+- Risk appetite: aggressive | EV sector career: POSITIVE tailwind
+- Planned car purchase in 18 months (estimated EMI Rs 17,000)
+- LTCG booked this year: Rs 0 (Rs 1.25L headroom available)
+- Market: Nifty P/E 22.4, RBI neutral, EV sector bullish
+- Home loan rate 8.5% vs equity post-tax return ~10.5%
+
+Today is {today}. Return ONLY this JSON — no prose, no markdown:
+
+{{
+  "projection": {{
+    "corpus_at_15yr_flat_sip_nominal_inr": <float>,
+    "corpus_at_15yr_flat_sip_real_inr": <float>,
+    "corpus_at_15yr_stepup_nominal_inr": <float>,
+    "corpus_at_15yr_stepup_real_inr": <float>,
+    "sip_needed_for_1cr_inr": <float>,
+    "sip_needed_for_2cr_inr": <float>,
+    "sip_needed_for_5cr_inr": <float>,
+    "wealth_gap_assessment": "<honest 2 sentence gap assessment>"
+  }},
+  "stepup_guidance": {{
+    "phase": <1 or 2 or 3>,
+    "phase_label": "<label>",
+    "recommended_sip_increase_inr": <float>,
+    "buffer_addition_inr": <float>,
+    "april_action": "<specific April instruction>",
+    "reasoning": "<2 sentence explanation>"
+  }},
+  "loan_vs_sip_verdict": {{
+    "verdict": "INVEST or PREPAY or BALANCED",
+    "reasoning": "<plain language with Rs numbers>"
+  }},
+  "tax_harvest_alert": {{
+    "opportunity_exists": <true or false>,
+    "ltcg_headroom_inr": 125000,
+    "recommended_action": "<specific steps>"
+  }},
+  "career_resilience_flag": {{
+    "signal": "POSITIVE or NEUTRAL or NEGATIVE",
+    "ev_sector_status": "<current EV outlook>",
+    "income_risk_level": "<low/medium/high>",
+    "implication_for_sip": "<how this affects investment aggression>"
+  }},
+  "action_items": [
+    {{
+      "priority": "URGENT or ADVISORY or FYI",
+      "action": "<specific action with deadline>",
+      "impact_inr": <float or null>,
+      "deadline": "<by when>"
+    }}
+  ],
+  "no_action_flag": <true or false>,
+  "no_action_reason": "<only if no action needed>",
+  "telegram_summary": "<100 word max plain text Telegram message. Start with score. Fund verdicts. Top 2 actions. 15yr corpus. No emojis. Brutally direct.>"
+}}
+"""
+
+    # ── Execute both calls with 15s gap to avoid rate limiting
+    print("      Running split analysis — Call 1 (portfolio)...")
+    result1_str = call_gemini(prompt_1, "Call-1")
+    if not result1_str:
+        print("[ERROR] Call 1 failed")
+        return None
+
+    print("      Waiting 15s before Call 2...")
+    time.sleep(15)
+
+    print("      Running split analysis — Call 2 (strategy)...")
+    result2_str = call_gemini(prompt_2, "Call-2")
+    if not result2_str:
+        print("[ERROR] Call 2 failed")
+        return None
+
+    # ── Merge both JSON responses
+    try:
+        result1 = json.loads(result1_str)
+        result2 = json.loads(result2_str)
+        merged = {**result1, **result2}
+        print("      [OK] Both calls successful — reports merged")
+        return merged
+    except json.JSONDecodeError as e:
+        print(f"[ERROR] JSON merge failed: {e}")
+        print(f"  Call 1 response: {result1_str[:200]}")
+        print(f"  Call 2 response: {result2_str[:200]}")
+        return None
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  SECTION 12 — TELEGRAM MESSAGE FORMATTER
