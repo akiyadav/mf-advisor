@@ -954,7 +954,7 @@ RULES — NON-NEGOTIABLE
 
 def call_claude_api(prompt: str) -> Optional[dict]:
     """
-    Calls Claude claude-sonnet-4-20250514 with the master analysis prompt.
+    Calls Claude gemini-2.0-flash with the master analysis prompt.
     Returns parsed JSON report or None on failure.
     """
     api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -971,7 +971,7 @@ def call_claude_api(prompt: str) -> Optional[dict]:
                 "content-type": "application/json",
             },
             json={
-                "model": "claude-sonnet-4-20250514",
+                "model": "gemini-2.0-flash",
                 "max_tokens": 4096,
                 "messages": [{"role": "user", "content": prompt}],
                 "system": (
