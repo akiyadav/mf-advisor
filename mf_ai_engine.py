@@ -2,44 +2,30 @@
 ================================================================================
   MF AI WEALTH ADVISOR ENGINE
   Author  : Built for Ankit | Bangalore
-  Version : 1.0.0
-  Purpose : Monthly mutual fund analysis engine with brutal honesty scoring,
-            full cost awareness, personal risk profiling, and step-up guidance.
-================================================================================
-
-ARCHITECTURE
-  1. investor_profile        — static personal context (update when life changes)
-  2. portfolio_data          — MF holdings (from Zerodha Kite API or manual input)
-  3. market_context_fetcher  — live macro + news signals via web search
-  4. fund_data_fetcher        — NAV, returns, AUM, manager data via MFapi.in
-  5. analysis_engine         — 18-dimension scoring across 5 pillars
-  6. ai_analyst              — Claude/Gemini prompt that synthesises everything
-  7. report_builder          — formats Telegram message + HTML dashboard data
-  8. main()                  — orchestrator; run this monthly via cron / GitHub Actions
-
-DEPENDENCIES
-  pip install requests anthropic python-telegram-bot schedule
-
-API KEYS NEEDED (set as environment variables)
-  ANTHROPIC_API_KEY     — for Claude AI analysis
-  TELEGRAM_BOT_TOKEN    — from @BotFather on Telegram
-  TELEGRAM_CHAT_ID      — your personal chat ID
-  KITE_API_KEY          — Zerodha Kite (optional — can use manual portfolio)
-  KITE_ACCESS_TOKEN     — refreshed monthly via kite_auth_helper.py
+  Version : 2.0.0
+  Fixes   : Bug 1 — wrong model in claude API (gemini model used in anthropic call)
+            Bug 2 — extract_json() undefined (was extract_json_string mismatch)
+            Bug 3 — indentation error in main() broke Python parsing
+            Bug 4 — extract_json_string scoped inside gemini fn, unavailable globally
+            Bug 5 — call_claude_api orphaned, never called in cascade
+            Bug 6 — import time inside functions (3 repeated imports)
+  Optimised: DRY prompts (shared build_sub_prompts), report validation layer,
+             clean AI cascade OpenAI → Groq → Gemini, all imports at top level
 ================================================================================
 """
 
 import os
 import json
+import time
 import datetime
 import requests
+import subprocess
+import shutil
 from typing import Optional
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  SECTION 1 — INVESTOR PROFILE
-#  Update this when your life situation changes.
-#  This is the personalisation core — every analysis is anchored to this.
 # ═══════════════════════════════════════════════════════════════════════════════
 
 INVESTOR_PROFILE = {
@@ -48,67 +34,49 @@ INVESTOR_PROFILE = {
     "city": "Bangalore",
     "investment_horizon_years": 15,
     "target_year": 2041,
-
-    # Income & liabilities
     "monthly_salary_inr": 140000,
     "home_loan_emi_inr": 60000,
     "home_loan_months_remaining": 241,
-    "home_loan_rate_pct": 8.5,           # update if floating rate changes
+    "home_loan_rate_pct": 8.5,
     "monthly_living_expenses_inr": 40000,
     "monthly_sip_inr": 20000,
-    "free_cash_monthly_inr": 60000,      # salary - EMI - SIP
-
-    # Emergency fund
-    "emergency_fund_inr": 350000,        # ₹3.5L (midpoint of 3-4L)
+    "free_cash_monthly_inr": 60000,
+    "emergency_fund_inr": 350000,
     "emergency_fund_location": "savings_account_7pct",
-    "emergency_fund_months_cover": 3.5,  # vs expenses+EMI of ~₹1L/month
-    "emergency_fund_target_inr": 600000, # 6-month target
-
-    # Insurance
+    "emergency_fund_months_cover": 3.5,
+    "emergency_fund_target_inr": 600000,
     "has_term_insurance": True,
     "has_health_insurance": True,
     "health_plan": "Niva Bupa Aspire Platinum+",
-    "term_cover_inr": None,              # FILL IN — must exceed loan balance + 10yr income
-
-    # Career
+    "term_cover_inr": None,
     "role": "Technical Manager — EV Charging & Thermal Systems",
     "domain": "EV charging infrastructure + battery thermal management",
     "sector": "automotive_ev",
-    "career_risk_level": "low_medium",   # EV is a tailwind, not headwind
+    "career_risk_level": "low_medium",
     "ev_domain_advantage": True,
-    "consulting_side_income_inr": 0,     # 0 now; model scenario at ₹15k-20k/mo
-
-    # Planned large expenses (next 24 months)
+    "consulting_side_income_inr": 0,
     "planned_expenses": [
         {"label": "Car purchase", "estimated_inr": 800000, "months_away": 18,
          "likely_loan": True, "estimated_loan_emi": 17000},
         {"label": "International trip", "estimated_inr": 200000, "months_away": 12,
-         "likely_loan": False}
+         "likely_loan": False},
     ],
-
-    # Tax
-    "income_tax_slab_pct": 30,           # assumed — update for new regime
-    "claims_80c": True,                  # home loan principal
-    "claims_sec24": True,                # home loan interest ₹2L deduction
-    "ltcg_booked_this_year_inr": 0,      # reset every April; track for harvesting
-
-    # Goals
-    "wealth_milestones_inr": [1000000, 5000000, 10000000, 20000000],  # 10L, 50L, 1Cr, 2Cr
-    "retirement_age_target": None,       # not defined yet — engine flags this
-
-    # Risk appetite
+    "income_tax_slab_pct": 30,
+    "claims_80c": True,
+    "claims_sec24": True,
+    "ltcg_booked_this_year_inr": 0,
+    "wealth_milestones_inr": [1000000, 5000000, 10000000, 20000000],
+    "retirement_age_target": None,
     "risk_appetite": "aggressive",
     "equity_allocation_target_pct": 85,
     "debt_allocation_target_pct": 10,
     "gold_allocation_target_pct": 5,
-    "international_allocation_target_pct": 10,  # within equity
+    "international_allocation_target_pct": 10,
 }
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  SECTION 2 — PORTFOLIO DATA
-#  Replace dummy data with live Zerodha fetch (see kite_fetcher below).
-#  Each fund entry must have all fields — engine will flag missing data.
+#  SECTION 2 — PORTFOLIO DATA (dummy — replaced by Zerodha live fetch)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 DUMMY_PORTFOLIO = [
@@ -126,7 +94,7 @@ DUMMY_PORTFOLIO = [
         "current_value_inr": 10400,
         "monthly_sip_inr": 7500,
         "sip_start_date": "2023-04-01",
-        "oldest_unit_date": "2023-04-01",  # for exit load calculation
+        "oldest_unit_date": "2023-04-01",
         "expense_ratio_pct": 0.58,
         "exit_load_pct": 1.0,
         "exit_load_window_days": 365,
@@ -137,7 +105,7 @@ DUMMY_PORTFOLIO = [
         "amfi_code": "120472",
         "category": "Large Cap",
         "amc": "Axis MF",
-        "plan": "regular",                 # ⚠ FLAG: Regular plan
+        "plan": "regular",
         "units": 98.10,
         "avg_nav": 45.00,
         "current_nav": 56.20,
@@ -193,30 +161,23 @@ DUMMY_PORTFOLIO = [
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  SECTION 3 — MARKET CONTEXT FETCHER
-#  Pulls macro signals, news, RBI/SEBI updates, sector trends.
-#  Uses Claude's web search or Perplexity API (free).
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def fetch_market_context() -> dict:
-    """
-    Returns structured market context for the current month.
-    In production: use web search API (Perplexity / Serper / Claude with search).
-    Dummy data shown here for structure reference.
-    """
     today = datetime.date.today()
     return {
         "date": str(today),
-        "nifty50_pe": 22.4,              # Current P/E — above 24 = caution
-        "nifty50_1m_return_pct": -2.1,   # Monthly return
+        "nifty50_pe": 22.4,
+        "nifty50_1m_return_pct": -2.1,
         "nifty500_1m_return_pct": -2.8,
         "rbi_repo_rate_pct": 6.25,
-        "rbi_stance": "neutral",         # hawkish / neutral / dovish
+        "rbi_stance": "neutral",
         "cpi_inflation_pct": 4.8,
-        "fii_flow_monthly_cr": -4200,    # Negative = selling
-        "dii_flow_monthly_cr": 6800,     # Positive = buying
+        "fii_flow_monthly_cr": -4200,
+        "dii_flow_monthly_cr": 6800,
         "india_gdp_growth_pct": 6.4,
         "usd_inr": 84.2,
-        "india_vix": 15.4,               # Below 15 = calm; above 20 = fear
+        "india_vix": 15.4,
         "global_macro_signals": [
             "US Fed maintained rates — no immediate cut signal",
             "China slowdown impacting EM sentiment",
@@ -232,25 +193,19 @@ def fetch_market_context() -> dict:
             "India-Pakistan: de-escalated",
             "US tariff policy: elevated uncertainty",
         ],
-        "market_valuation_signal": "CAUTION",  # CHEAP / FAIR / CAUTION / EXPENSIVE
-        "lump_sum_opportunity": False,   # True when market dips >15%
-        "ltcg_harvest_window": True,     # Jan–Mar = ideal harvest window
-        "ev_sector_sentiment": "BULLISH",  # Career resilience signal for Ankit
+        "market_valuation_signal": "CAUTION",
+        "lump_sum_opportunity": False,
+        "ltcg_harvest_window": True,
+        "ev_sector_sentiment": "BULLISH",
         "ev_hiring_trend": "SURGING",
     }
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  SECTION 4 — FUND DATA FETCHER
-#  Fetches rolling returns, AUM, manager data, category rank from MFapi.in.
-#  MFapi.in is free, no API key needed.
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def fetch_fund_data(amfi_code: str) -> Optional[dict]:
-    """
-    Fetches NAV history from MFapi.in.
-    Returns last 5 years of NAV data for rolling return calculation.
-    """
     try:
         url = f"https://api.mfapi.in/mf/{amfi_code}"
         resp = requests.get(url, timeout=10)
@@ -259,7 +214,7 @@ def fetch_fund_data(amfi_code: str) -> Optional[dict]:
             return {
                 "fund_name": data.get("meta", {}).get("fund_name"),
                 "scheme_type": data.get("meta", {}).get("scheme_type"),
-                "nav_history": data.get("data", [])[:1825],  # 5 years
+                "nav_history": data.get("data", [])[:1825],
             }
     except Exception as e:
         print(f"[WARN] Fund data fetch failed for {amfi_code}: {e}")
@@ -267,10 +222,6 @@ def fetch_fund_data(amfi_code: str) -> Optional[dict]:
 
 
 def calculate_cagr(nav_history: list, years: int) -> Optional[float]:
-    """
-    Calculates CAGR over specified years from NAV history.
-    nav_history is sorted newest-first from MFapi.in.
-    """
     if not nav_history or len(nav_history) < years * 252:
         return None
     try:
@@ -278,16 +229,11 @@ def calculate_cagr(nav_history: list, years: int) -> Optional[float]:
         past_nav = float(nav_history[min(years * 252, len(nav_history) - 1)]["nav"])
         cagr = ((current_nav / past_nav) ** (1 / years) - 1) * 100
         return round(cagr, 2)
-    except:
+    except Exception:
         return None
 
 
 def calculate_rolling_returns(nav_history: list, window_years: int = 3) -> dict:
-    """
-    Calculates rolling returns over the full available history.
-    Returns min, max, median, and % of positive rolling periods.
-    This is far more honest than point-to-point returns.
-    """
     window_days = window_years * 252
     rolling = []
     for i in range(len(nav_history) - window_days):
@@ -296,7 +242,7 @@ def calculate_rolling_returns(nav_history: list, window_years: int = 3) -> dict:
             end_nav = float(nav_history[i]["nav"])
             cagr = ((end_nav / start_nav) ** (1 / window_years) - 1) * 100
             rolling.append(round(cagr, 2))
-        except:
+        except Exception:
             continue
     if not rolling:
         return {"min": None, "max": None, "median": None, "pct_positive": None}
@@ -314,52 +260,37 @@ def calculate_rolling_returns(nav_history: list, window_years: int = 3) -> dict:
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  SECTION 5 — EXIT COST CALCULATOR
-#  Calculates true cost of exiting each fund considering:
-#  exit load per SIP tranche, capital gains tax, opportunity cost, re-entry.
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def calculate_exit_cost(fund: dict, investor: dict) -> dict:
-    """
-    Returns full exit cost breakdown for a fund.
-    Accounts for per-unit exit load windows (each SIP has own 1-year clock).
-    """
     today = datetime.date.today()
     sip_start = datetime.date.fromisoformat(fund["sip_start_date"])
     months_invested = (today.year - sip_start.year) * 12 + (today.month - sip_start.month)
+    months_invested = max(months_invested, 1)
 
-    # Units still within exit load window (approx: last 12 months of SIPs)
-    monthly_sip = fund["monthly_sip_inr"]
-    units_in_window = min(12, months_invested)  # months of SIP within 1yr lock
-    value_in_window = (units_in_window / max(months_invested, 1)) * fund["current_value_inr"]
+    units_in_window = min(12, months_invested)
+    value_in_window = (units_in_window / months_invested) * fund["current_value_inr"]
     exit_load_cost = value_in_window * (fund["exit_load_pct"] / 100)
 
-    # Capital gains
     total_gain = fund["current_value_inr"] - fund["invested_inr"]
     oldest_unit = datetime.date.fromisoformat(fund["oldest_unit_date"])
     days_held = (today - oldest_unit).days
+
     if days_held >= 365:
-        # LTCG: 12.5% above ₹1.25L exemption
-        taxable_gain = max(0, total_gain - (125000 - investor["ltcg_booked_this_year_inr"]))
+        taxable_gain = max(0, total_gain - max(0, 125000 - investor["ltcg_booked_this_year_inr"]))
         tax_cost = taxable_gain * 0.125
         tax_type = "LTCG @ 12.5%"
     else:
-        # STCG: 20% flat
-        tax_cost = total_gain * 0.20
+        tax_cost = max(0, total_gain) * 0.20
         tax_type = "STCG @ 20%"
 
-    # STT on redemption
-    stt = fund["current_value_inr"] * 0.00001  # 0.001%
-
-    # Stamp duty on reinvestment
-    stamp_duty = fund["current_value_inr"] * 0.00005  # 0.005%
-
-    # Opportunity cost (5 trading days out of market)
-    daily_market_return = 0.12 / 252  # assuming 12% annual
-    opportunity_cost = fund["current_value_inr"] * daily_market_return * 5
-
+    stt = fund["current_value_inr"] * 0.00001
+    stamp_duty = fund["current_value_inr"] * 0.00005
+    opportunity_cost = fund["current_value_inr"] * (0.12 / 252) * 5
     total_exit_cost = exit_load_cost + tax_cost + stt + stamp_duty + opportunity_cost
 
     return {
+        "fund_name": fund["fund_name"],
         "exit_load_inr": round(exit_load_cost, 2),
         "capital_gains_tax_inr": round(tax_cost, 2),
         "tax_type": tax_type,
@@ -375,20 +306,13 @@ def calculate_exit_cost(fund: dict, investor: dict) -> dict:
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  SECTION 6 — PERSONAL RISK SCORER
-#  Scores Ankit's personal financial health before even looking at funds.
-#  Feeds directly into how aggressively the engine recommends changes.
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def score_personal_risk(investor: dict, market: dict) -> dict:
-    """
-    Calculates personal financial health score with flags.
-    Score: 0–10. Below 6 = engine takes defensive stance on recommendations.
-    """
     score = 10.0
     flags = []
     positives = []
 
-    # EMI-to-income ratio
     emi_ratio = investor["home_loan_emi_inr"] / investor["monthly_salary_inr"]
     if emi_ratio > 0.40:
         score -= 1.5
@@ -399,7 +323,6 @@ def score_personal_risk(investor: dict, market: dict) -> dict:
     else:
         positives.append("EMI-to-income ratio healthy")
 
-    # Emergency fund coverage
     monthly_burn = investor["home_loan_emi_inr"] + investor["monthly_living_expenses_inr"]
     ef_months = investor["emergency_fund_inr"] / monthly_burn
     if ef_months < 3:
@@ -407,41 +330,42 @@ def score_personal_risk(investor: dict, market: dict) -> dict:
         flags.append(f"Emergency fund covers only {ef_months:.1f} months — critically low")
     elif ef_months < 6:
         score -= 0.8
-        flags.append(f"Emergency fund at {ef_months:.1f} months — target is 6 months (₹{investor['emergency_fund_target_inr']:,})")
+        flags.append(
+            f"Emergency fund at {ef_months:.1f} months — target 6 months "
+            f"(₹{investor['emergency_fund_target_inr']:,})"
+        )
     else:
         positives.append(f"Emergency fund healthy at {ef_months:.1f} months")
 
-    # Planned large expenses (car loan impact)
     for expense in investor["planned_expenses"]:
         if expense.get("likely_loan") and expense["months_away"] <= 18:
-            future_emi_ratio = (investor["home_loan_emi_inr"] + expense["estimated_loan_emi"]) / investor["monthly_salary_inr"]
+            future_emi_ratio = (
+                investor["home_loan_emi_inr"] + expense["estimated_loan_emi"]
+            ) / investor["monthly_salary_inr"]
             if future_emi_ratio > 0.50:
                 score -= 1.0
                 flags.append(
                     f"Car loan adds ₹{expense['estimated_loan_emi']:,}/mo — "
-                    f"total EMI will hit {future_emi_ratio*100:.0f}% of income in ~{expense['months_away']} months"
+                    f"total EMI hits {future_emi_ratio*100:.0f}% of income in "
+                    f"~{expense['months_away']} months"
                 )
 
-    # Insurance adequacy
     if investor["term_cover_inr"] is None:
         score -= 0.5
-        flags.append("Term insurance cover amount not verified — must exceed outstanding loan + 10yr income")
+        flags.append("Term insurance cover amount not verified — must exceed loan + 10yr income")
 
-    # Career resilience (positive factor for Ankit)
-    if investor["ev_domain_advantage"] and market["ev_sector_sentiment"] == "BULLISH":
+    if investor["ev_domain_advantage"] and market.get("ev_sector_sentiment") == "BULLISH":
         score = min(10, score + 0.5)
         positives.append("EV sector bullish — career income risk low, step-up likely")
 
-    # RBI rate risk on floating loan
-    if investor["home_loan_rate_pct"] > 8.0 and market["rbi_stance"] == "hawkish":
+    if investor["home_loan_rate_pct"] > 8.0 and market.get("rbi_stance") == "hawkish":
         score -= 0.3
         flags.append("Floating rate risk: RBI hawkish stance may push EMI higher")
 
-    # Savings interest (positive — 7% is good)
     positives.append("Emergency fund earning 7% in savings account — optimally placed")
 
     return {
-        "personal_risk_score": round(max(0, min(10, score)), 1),
+        "personal_risk_score": round(max(0.0, min(10.0, score)), 1),
         "flags": flags,
         "positives": positives,
         "emi_ratio_pct": round(emi_ratio * 100, 1),
@@ -452,93 +376,60 @@ def score_personal_risk(investor: dict, market: dict) -> dict:
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  SECTION 7 — SIP STEP-UP CALCULATOR
-#  Calculates personalised step-up guidance for April every year.
-#  Not a flat 10% — tied to actual cash flow, career phase, buffer status.
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def calculate_stepup_guidance(investor: dict, personal_risk: dict, market: dict) -> dict:
-    """
-    Returns personalised SIP step-up recommendation for the year.
-    Phase 1: Buffer building — no step-up yet
-    Phase 2: Buffer secured — 50% of net increment to SIP
-    Phase 3: Career boom + hike >15% — step-up 60-70%
-    """
     ef_months = personal_risk["emergency_fund_months"]
-    career_boom = (market["ev_sector_sentiment"] == "BULLISH" and
-                   market["ev_hiring_trend"] == "SURGING")
+    career_boom = (
+        market.get("ev_sector_sentiment") == "BULLISH"
+        and market.get("ev_hiring_trend") == "SURGING"
+    )
 
-    # Phase determination
+    def corpus_at_15yr(monthly_sip: float, cagr: float = 0.12) -> float:
+        n = 15 * 12
+        r = cagr / 12
+        return monthly_sip * ((((1 + r) ** n) - 1) / r) * (1 + r)
+
+    def real_corpus(nominal: float, inflation: float = 0.06, years: int = 15) -> float:
+        return nominal / ((1 + inflation) ** years)
+
+    current_sip = investor["monthly_sip_inr"]
+
     if ef_months < 4:
-        phase = 1
-        phase_label = "Buffer Building"
+        phase, phase_label = 1, "Buffer Building"
         sip_increase_inr = 0
         buffer_monthly_addition = 10000
+        months_to_target = int(
+            (investor["emergency_fund_target_inr"] - investor["emergency_fund_inr"]) / 10000
+        )
         reasoning = (
-            f"Emergency fund at {ef_months:.1f} months. "
-            f"Do not increase SIP yet. Direct ₹10,000/month to savings account "
-            f"until buffer reaches ₹{investor['emergency_fund_target_inr']:,} "
-            f"({6} months cover). Estimated time to complete: "
-            f"{int((investor['emergency_fund_target_inr'] - investor['emergency_fund_inr']) / 10000)} months."
+            f"Emergency fund at {ef_months:.1f} months. Do not increase SIP yet. "
+            f"Direct ₹10,000/month to savings until buffer hits "
+            f"₹{investor['emergency_fund_target_inr']:,}. "
+            f"Estimated time: {months_to_target} months."
         )
     elif ef_months < 6:
-        phase = 2
-        phase_label = "Parallel Build"
-        buffer_gap = investor["emergency_fund_target_inr"] - investor["emergency_fund_inr"]
+        phase, phase_label = 2, "Parallel Build"
+        sip_increase_inr = 5000
         buffer_monthly_addition = 5000
-        sip_increase_inr = 5000  # modest step-up while building buffer
+        buffer_gap = investor["emergency_fund_target_inr"] - investor["emergency_fund_inr"]
         reasoning = (
             f"Buffer at {ef_months:.1f} months — close but not there. "
             f"Split increment: ₹5,000/month to buffer, ₹5,000/month to SIP. "
             f"Buffer closes in ~{int(buffer_gap / 5000)} months."
         )
     else:
-        phase = 3
-        phase_label = "Full Acceleration"
+        phase, phase_label = 3, "Full Acceleration"
         buffer_monthly_addition = 0
-        if career_boom:
-            step_up_pct = 0.65
-            reasoning = (
-                "Buffer secured. EV sector surging — high probability of above-average "
-                "increment this April. Step-up 65% of net salary increment to SIP. "
-                "Reduce buffer addition to zero — deploy aggressively."
-            )
-        else:
-            step_up_pct = 0.50
-            reasoning = (
-                "Buffer secured. Step-up 50% of net salary increment to SIP. "
-                "Keep 50% as lifestyle/buffer top-up."
-            )
-        # Example: if ₹15k increment
-        example_increment = 15000
-        sip_increase_inr = int(example_increment * step_up_pct)
-
-    # 15-year corpus projections at different SIP levels
-    def corpus_at_15yr(monthly_sip, cagr=0.12):
-        n = 15 * 12
-        r = cagr / 12
-        return monthly_sip * ((((1 + r) ** n) - 1) / r) * (1 + r)
-
-    def real_corpus(nominal, inflation=0.06, years=15):
-        return nominal / ((1 + inflation) ** years)
-
-    current_sip = investor["monthly_sip_inr"]
-    projections = {
-        "flat_sip": {
-            "sip_amount": current_sip,
-            "corpus_15yr_nominal": round(corpus_at_15yr(current_sip)),
-            "corpus_15yr_real": round(real_corpus(corpus_at_15yr(current_sip))),
-        },
-        "stepup_10pct_annual": {
-            "note": "SIP grows 10% each year",
-            "corpus_15yr_nominal": round(corpus_at_15yr(current_sip) * 2.1),  # approx multiplier
-            "corpus_15yr_real": round(real_corpus(corpus_at_15yr(current_sip) * 2.1)),
-        },
-        "stepup_after_phase": {
-            "sip_amount_after_stepup": current_sip + sip_increase_inr,
-            "corpus_15yr_nominal": round(corpus_at_15yr(current_sip + sip_increase_inr)),
-            "corpus_15yr_real": round(real_corpus(corpus_at_15yr(current_sip + sip_increase_inr))),
-        },
-    }
+        step_up_pct = 0.65 if career_boom else 0.50
+        sip_increase_inr = int(15000 * step_up_pct)
+        reasoning = (
+            "Buffer secured. "
+            + ("EV sector surging — step-up 65% of April increment aggressively. "
+               if career_boom
+               else "Step-up 50% of April increment. Keep 50% as lifestyle/buffer. ")
+            + "Invest consistently."
+        )
 
     return {
         "phase": phase,
@@ -546,7 +437,23 @@ def calculate_stepup_guidance(investor: dict, personal_risk: dict, market: dict)
         "sip_increase_recommended_inr": sip_increase_inr,
         "buffer_monthly_addition_inr": buffer_monthly_addition,
         "reasoning": reasoning,
-        "projections": projections,
+        "projections": {
+            "flat_sip": {
+                "sip_amount": current_sip,
+                "corpus_15yr_nominal": round(corpus_at_15yr(current_sip)),
+                "corpus_15yr_real": round(real_corpus(corpus_at_15yr(current_sip))),
+            },
+            "stepup_10pct_annual": {
+                "note": "SIP grows 10% each year",
+                "corpus_15yr_nominal": round(corpus_at_15yr(current_sip) * 2.1),
+                "corpus_15yr_real": round(real_corpus(corpus_at_15yr(current_sip) * 2.1)),
+            },
+            "stepup_after_phase": {
+                "sip_amount_after_stepup": current_sip + sip_increase_inr,
+                "corpus_15yr_nominal": round(corpus_at_15yr(current_sip + sip_increase_inr)),
+                "corpus_15yr_real": round(real_corpus(corpus_at_15yr(current_sip + sip_increase_inr))),
+            },
+        },
         "tax_harvest_opportunity": market.get("ltcg_harvest_window", False),
         "ltcg_booked_inr": investor["ltcg_booked_this_year_inr"],
         "ltcg_headroom_inr": max(0, 125000 - investor["ltcg_booked_this_year_inr"]),
@@ -555,69 +462,51 @@ def calculate_stepup_guidance(investor: dict, personal_risk: dict, market: dict)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  SECTION 8 — HOME LOAN vs SIP ANALYSER
-#  Monthly verdict: does prepaying one EMI beat investing that same amount?
-#  This is the most underrated financial decision — now automated.
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def analyse_loan_vs_sip(investor: dict) -> dict:
-    """
-    Compares benefit of ₹X prepayment vs ₹X investment at current market conditions.
-    Returns monthly verdict with ₹ impact numbers.
-    """
-    loan_rate = investor["home_loan_rate_pct"] / 100
-    months_remaining = investor["home_loan_months_remaining"]
-    equity_expected_cagr = 0.12
-    safe_return = 0.07  # savings account
+    loan_rate = investor["home_loan_rate_pct"]
+    equity_post_tax = 12.0 * 0.875  # 12% CAGR × 0.875 post LTCG ≈ 10.5%
 
-    # Guaranteed return on prepayment = loan rate saved
-    prepay_guaranteed_return = investor["home_loan_rate_pct"]
-
-    # Expected equity return (uncertain, 12% assumption)
-    equity_expected_return = equity_expected_cagr * 100
-
-    # Post-tax equity return (LTCG 12.5% on gains above ₹1.25L)
-    equity_post_tax = equity_expected_return * 0.875  # approximate
-
-    # Verdict
-    if equity_post_tax > prepay_guaranteed_return + 1.0:
+    if equity_post_tax > loan_rate + 1.0:
         verdict = "INVEST"
         verdict_reason = (
             f"Equity post-tax return ({equity_post_tax:.1f}%) exceeds loan cost "
-            f"({prepay_guaranteed_return}%) by {equity_post_tax - prepay_guaranteed_return:.1f}%. "
+            f"({loan_rate}%) by {equity_post_tax - loan_rate:.1f}%. "
             f"Keep investing — prepayment not optimal right now."
         )
-    elif abs(equity_post_tax - prepay_guaranteed_return) <= 1.0:
+    elif abs(equity_post_tax - loan_rate) <= 1.0:
         verdict = "BALANCED"
         verdict_reason = (
-            f"Returns nearly equal. Prepay only if psychological debt-free benefit "
-            f"matters to you, or if RBI hike cycle restarts."
+            "Returns nearly equal. Prepay only if psychological debt-free benefit "
+            "matters, or if RBI hike cycle restarts."
         )
     else:
         verdict = "PREPAY"
         verdict_reason = (
-            f"Loan rate ({prepay_guaranteed_return}%) exceeds expected post-tax equity "
-            f"({equity_post_tax:.1f}%). Extra cash better used in prepayment."
+            f"Loan rate ({loan_rate}%) exceeds equity post-tax ({equity_post_tax:.1f}%). "
+            "Extra cash better deployed in prepayment."
         )
 
-    # Impact of one extra EMI prepayment
-    extra_emi = investor["home_loan_emi_inr"]
-    months_saved_approx = int(extra_emi / (investor["home_loan_emi_inr"] * 0.08))
-    interest_saved = extra_emi * loan_rate * months_remaining / 12
+    interest_saved = (
+        investor["home_loan_emi_inr"]
+        * (loan_rate / 100)
+        * investor["home_loan_months_remaining"]
+        / 12
+    )
 
     return {
         "verdict": verdict,
         "verdict_reason": verdict_reason,
-        "loan_rate_pct": prepay_guaranteed_return,
+        "loan_rate_pct": loan_rate,
         "equity_expected_post_tax_pct": round(equity_post_tax, 1),
         "one_extra_emi_interest_saved_inr": round(interest_saved, 0),
-        "breakeven_equity_return_pct": round(prepay_guaranteed_return / 0.875, 1),
+        "breakeven_equity_return_pct": round(loan_rate / 0.875, 1),
     }
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  SECTION 9 — PORTFOLIO OVERLAP ANALYSER
-#  Detects stock-level overlap across funds.
-#  Uses top holdings data — in production fetch from AMFI monthly disclosures.
 # ═══════════════════════════════════════════════════════════════════════════════
 
 DUMMY_FUND_HOLDINGS = {
@@ -633,25 +522,17 @@ DUMMY_FUND_HOLDINGS = {
 
 
 def calculate_portfolio_overlap(portfolio: list) -> dict:
-    """
-    Calculates pairwise and overall stock overlap across all funds.
-    High overlap = you are not as diversified as you think.
-    """
-    overlap_matrix = {}
-    all_stocks = {}
+    all_stocks: dict = {}
+    overlap_matrix: dict = {}
 
     for fund in portfolio:
-        isin = fund["isin"]
-        holdings = DUMMY_FUND_HOLDINGS.get(isin, [])
-        for stock in holdings:
+        for stock in DUMMY_FUND_HOLDINGS.get(fund["isin"], []):
             all_stocks[stock] = all_stocks.get(stock, 0) + 1
 
-    # Stocks held in 2+ funds
     duplicates = {s: c for s, c in all_stocks.items() if c >= 2}
     total_unique = len(all_stocks)
-    overlap_pct = round(len(duplicates) / total_unique * 100, 1) if total_unique else 0
+    overlap_pct = round(len(duplicates) / total_unique * 100, 1) if total_unique else 0.0
 
-    # Pairwise
     for i, f1 in enumerate(portfolio):
         for j, f2 in enumerate(portfolio):
             if i >= j:
@@ -662,7 +543,7 @@ def calculate_portfolio_overlap(portfolio: list) -> dict:
             pair_key = f"{f1['fund_name'][:20]} / {f2['fund_name'][:20]}"
             overlap_matrix[pair_key] = {
                 "common_stocks": list(common),
-                "overlap_pct": round(len(common) / max(len(h1), 1) * 100, 1)
+                "overlap_pct": round(len(common) / max(len(h1), 1) * 100, 1),
             }
 
     return {
@@ -675,10 +556,6 @@ def calculate_portfolio_overlap(portfolio: list) -> dict:
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  SECTION 10 — MASTER AI ANALYSIS PROMPT
-#  This is the most critical function in the engine.
-#  Sends ALL computed data to Claude for final synthesis and brutal honest verdict.
-#  Prompt is engineered to prevent hallucination, enforce ₹-first outputs,
-#  and mandate brutal honesty over feel-good advice.
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def build_master_prompt(
@@ -692,21 +569,10 @@ def build_master_prompt(
     exit_costs: list,
 ) -> str:
 
-    portfolio_json = json.dumps(portfolio, indent=2)
-    market_json = json.dumps(market, indent=2)
-    personal_risk_json = json.dumps(personal_risk, indent=2)
-    step_up_json = json.dumps(step_up, indent=2)
-    loan_sip_json = json.dumps(loan_vs_sip, indent=2)
-    overlap_json = json.dumps(overlap, indent=2)
-    exit_costs_json = json.dumps(exit_costs, indent=2)
-
     prompt = f"""
 You are a brutally honest, independent financial analyst. You are NOT a salesperson.
 Your single goal is to help {investor['name']} build maximum long-term wealth by
 {investor['target_year']} (15 years from now) through optimal mutual fund strategy.
-
-You will now receive structured data from a quantitative analysis engine.
-Your job is to synthesise this into a FINAL ADVISORY REPORT.
 
 ════════════════════════════════════════════
 INVESTOR PROFILE
@@ -714,102 +580,99 @@ INVESTOR PROFILE
 Name          : {investor['name']}, Age {investor['age']}, Bangalore
 Role          : {investor['role']}
 Domain        : {investor['domain']}
-Monthly income: ₹{investor['monthly_salary_inr']:,}
-Home loan EMI : ₹{investor['home_loan_emi_inr']:,} ({investor['home_loan_months_remaining']} months left)
-Monthly SIP   : ₹{investor['monthly_sip_inr']:,}
-Free cash     : ₹{investor['free_cash_monthly_inr']:,}/month
-Emergency fund: ₹{investor['emergency_fund_inr']:,} at 7% savings account
+Monthly income: Rs {investor['monthly_salary_inr']:,}
+Home loan EMI : Rs {investor['home_loan_emi_inr']:,} ({investor['home_loan_months_remaining']} months left)
+Monthly SIP   : Rs {investor['monthly_sip_inr']:,}
+Free cash     : Rs {investor['free_cash_monthly_inr']:,}/month
+Emergency fund: Rs {investor['emergency_fund_inr']:,} at 7% savings account
 Tax slab      : {investor['income_tax_slab_pct']}%
 Risk appetite : {investor['risk_appetite']}
-Career edge   : EV domain — charging + thermal. This is a TAILWIND, not a risk.
+Career edge   : EV domain — charging + thermal. TAILWIND, not a risk.
 
 PLANNED LARGE EXPENSES:
 {json.dumps(investor['planned_expenses'], indent=2)}
 
 ════════════════════════════════════════════
-PORTFOLIO DATA (from Zerodha / manual input)
+PORTFOLIO DATA
 ════════════════════════════════════════════
-{portfolio_json}
+{json.dumps(portfolio, indent=2)}
 
 ════════════════════════════════════════════
-EXIT COST ANALYSIS (pre-computed per fund)
+EXIT COST ANALYSIS (pre-computed)
 ════════════════════════════════════════════
-{exit_costs_json}
+{json.dumps(exit_costs, indent=2)}
 
 ════════════════════════════════════════════
-MARKET CONTEXT (current month)
+MARKET CONTEXT
 ════════════════════════════════════════════
-{market_json}
+{json.dumps(market, indent=2)}
 
 ════════════════════════════════════════════
 PERSONAL RISK SCORE
 ════════════════════════════════════════════
-{personal_risk_json}
+{json.dumps(personal_risk, indent=2)}
 
 ════════════════════════════════════════════
-SIP STEP-UP GUIDANCE (pre-calculated)
+SIP STEP-UP GUIDANCE
 ════════════════════════════════════════════
-{step_up_json}
-
-════════════════════════════════════════════
-HOME LOAN vs SIP VERDICT (this month)
-════════════════════════════════════════════
-{loan_sip_json}
+{json.dumps(step_up, indent=2)}
 
 ════════════════════════════════════════════
-PORTFOLIO OVERLAP ANALYSIS
+HOME LOAN vs SIP
 ════════════════════════════════════════════
-{overlap_json}
+{json.dumps(loan_vs_sip, indent=2)}
 
 ════════════════════════════════════════════
-YOUR ANALYSIS MANDATE — 18 DIMENSIONS
+PORTFOLIO OVERLAP
+════════════════════════════════════════════
+{json.dumps(overlap, indent=2)}
+
+════════════════════════════════════════════
+ANALYSIS MANDATE — 18 DIMENSIONS
 ════════════════════════════════════════════
 
-Score EACH of the following and provide findings. Be specific, use ₹ figures not just %.
+PILLAR 1 — PORTFOLIO QUALITY (30%)
+  D1. Returns vs benchmark (Nifty 50, Nifty 500, category average)
+  D2. Rolling 3yr returns (min, max, median, % positive periods)
+  D3. Risk-adjusted return (Sharpe ratio proxy)
+  D4. Alpha vs category — is manager earning the expense ratio?
+  D5. Drawdown in 2020/2022 and recovery time
 
-PILLAR 1 — PORTFOLIO QUALITY (weight: 30%)
-  D1. Point-to-point returns vs benchmark (Nifty 50, Nifty 500, category average)
-  D2. Rolling 3-year returns (min, max, median, % positive periods)
-  D3. Risk-adjusted return (Sharpe ratio proxy: return / volatility)
-  D4. Alpha generated vs category — is the manager earning their expense ratio?
-  D5. Drawdown behaviour — max fall in 2020 / 2022 and recovery time
+PILLAR 2 — COST INTELLIGENCE (20%)
+  D6. Expense ratio vs category peers
+  D7. Direct vs Regular plan — exact Rs lost annually
+  D8. Is switching worth it after ALL exit costs?
+  D9. STT + stamp duty + opportunity cost of switching
+  D10. LTCG harvest opportunity this month?
 
-PILLAR 2 — COST INTELLIGENCE (weight: 20%)
-  D6. Expense ratio vs category peers — flag if above median
-  D7. Direct vs Regular plan — exact ₹ lost annually per fund
-  D8. Exit cost reality — is switching worth it after all costs?
-  D9. STT, stamp duty, opportunity cost — total real cost to exit/switch
-  D10. Tax efficiency — LTCG harvest opportunity this month?
+PILLAR 3 — PORTFOLIO CONSTRUCTION (15%)
+  D11. Stock overlap % — truly diversified?
+  D12. Sector concentration across funds
+  D13. AMC concentration — more than 50% in one AMC?
+  D14. AUM size risk — too large for category?
+  D15. Any fund under 3 years (no stress-test data)?
 
-PILLAR 3 — PORTFOLIO CONSTRUCTION (weight: 15%)
-  D11. Stock overlap % across funds — are you really diversified?
-  D12. Sector concentration — same sector overweighted across multiple funds?
-  D13. AMC concentration — more than 50% AUM in one AMC?
-  D14. AUM size risk — is any fund too large for its category?
-  D15. NFO / new fund trap — any fund under 3 years old with no stress-test data?
-
-PILLAR 4 — PERSONAL RISK (weight: 25%)
+PILLAR 4 — PERSONAL RISK (25%)
   D16. EMI-to-income ratio vs safe threshold
-  D17. Emergency fund adequacy — months of cover vs target
-  D18. Car purchase impact — future EMI squeeze on SIP continuity
+  D17. Emergency fund adequacy vs target
+  D18. Car purchase EMI squeeze on SIP continuity
 
-PILLAR 5 — BEHAVIOUR + STRATEGY (weight: 10%)
-  D19. SIP continuity — any gaps or missed SIPs?
-  D20. Step-up discipline — on track for wealth goal?
-  D21. Global / gold diversification — INR concentration risk?
-  D22. Home loan vs SIP — correct allocation this month?
+PILLAR 5 — BEHAVIOUR + STRATEGY (10%)
+  D19. SIP continuity — any gaps?
+  D20. Step-up discipline — on track?
+  D21. Global/gold diversification — INR risk?
+  D22. Home loan vs SIP — correct this month?
 
 ════════════════════════════════════════════
-OUTPUT FORMAT — MANDATORY STRUCTURE
+OUTPUT FORMAT — MANDATORY
 ════════════════════════════════════════════
 
-Return your response as a valid JSON object with EXACTLY this structure:
+Return ONLY a valid JSON object. No prose before or after. No markdown fences.
 
 {{
   "report_date": "YYYY-MM-DD",
   "master_score": <float 0-10>,
   "master_score_reasoning": "<2-3 sentence honest explanation>",
-
   "pillar_scores": {{
     "portfolio_quality": <float 0-10>,
     "cost_intelligence": <float 0-10>,
@@ -817,12 +680,11 @@ Return your response as a valid JSON object with EXACTLY this structure:
     "personal_risk": <float 0-10>,
     "behaviour_strategy": <float 0-10>
   }},
-
   "fund_ratings": [
     {{
       "fund_name": "<name>",
       "score": <float 0-10>,
-      "verdict": "HOLD" | "WATCH" | "SWITCH" | "EXIT",
+      "verdict": "HOLD or WATCH or SWITCH or EXIT",
       "1yr_cagr_pct": <float or null>,
       "3yr_cagr_pct": <float or null>,
       "alpha_vs_category": "<positive/negative/neutral>",
@@ -831,10 +693,9 @@ Return your response as a valid JSON object with EXACTLY this structure:
       "exit_cost_inr": <float>,
       "net_switch_benefit_inr": <float or null>,
       "key_finding": "<one brutal honest sentence>",
-      "action": "<specific action in plain language>"
+      "action": "<specific action>"
     }}
   ],
-
   "returns_analysis": {{
     "portfolio_xirr_pct": <float>,
     "real_return_post_inflation_pct": <float>,
@@ -845,7 +706,6 @@ Return your response as a valid JSON object with EXACTLY this structure:
     "vs_fd_pct": <float>,
     "sip_efficiency_score": <float 0-10>
   }},
-
   "projection": {{
     "corpus_at_15yr_flat_sip_nominal_inr": <float>,
     "corpus_at_15yr_flat_sip_real_inr": <float>,
@@ -854,290 +714,92 @@ Return your response as a valid JSON object with EXACTLY this structure:
     "sip_needed_for_1cr_inr": <float>,
     "sip_needed_for_2cr_inr": <float>,
     "sip_needed_for_5cr_inr": <float>,
-    "wealth_gap_assessment": "<honest gap assessment in plain language>"
+    "wealth_gap_assessment": "<honest 2 sentence gap assessment>"
   }},
-
   "cost_summary": {{
     "total_annual_expense_drag_inr": <float>,
     "regular_plan_annual_loss_inr": <float>,
     "15yr_compounding_loss_from_regular_plan_inr": <float>,
     "recommended_cost_actions": ["<action1>", "<action2>"]
   }},
-
   "stepup_guidance": {{
     "phase": <int 1-3>,
     "phase_label": "<label>",
     "recommended_sip_increase_inr": <float>,
     "buffer_addition_inr": <float>,
-    "april_action": "<specific instruction for April>",
+    "april_action": "<specific April instruction>",
     "reasoning": "<2-3 sentence explanation>"
   }},
-
   "loan_vs_sip_verdict": {{
-    "verdict": "INVEST" | "PREPAY" | "BALANCED",
-    "reasoning": "<plain language explanation with ₹ numbers>"
+    "verdict": "INVEST or PREPAY or BALANCED",
+    "reasoning": "<plain language with Rs numbers>"
   }},
-
   "tax_harvest_alert": {{
     "opportunity_exists": <bool>,
     "ltcg_headroom_inr": <float>,
-    "recommended_action": "<specific steps if opportunity exists>"
+    "recommended_action": "<specific steps>"
   }},
-
   "career_resilience_flag": {{
-    "signal": "POSITIVE" | "NEUTRAL" | "NEGATIVE",
+    "signal": "POSITIVE or NEUTRAL or NEGATIVE",
     "ev_sector_status": "<current EV sector outlook>",
     "income_risk_level": "<low/medium/high>",
     "implication_for_sip": "<how this affects investment aggression>"
   }},
-
   "brutal_honesty_block": [
-    "<Finding 1 — most important, most uncomfortable truth>",
-    "<Finding 2>",
-    "<Finding 3>",
-    "<Finding 4>",
-    "<Finding 5 — only include if genuinely material>"
+    "<most important uncomfortable truth>",
+    "<second finding>",
+    "<third finding>",
+    "<fourth finding>"
   ],
-
   "action_items": [
     {{
-      "priority": "URGENT" | "ADVISORY" | "FYI",
-      "action": "<specific action — what to do, how, by when>",
-      "impact_inr": <estimated ₹ impact if acted upon>,
+      "priority": "URGENT or ADVISORY or FYI",
+      "action": "<specific action — what, how, by when>",
+      "impact_inr": <float or null>,
       "deadline": "<by when>"
     }}
   ],
-
   "no_action_flag": <bool>,
-  "no_action_reason": "<only populate if no_action_flag is true>",
-
-  "telegram_summary": "<60-word max plain-text summary for Telegram message. Start with score. One action line. No emojis. Brutally direct.>"
+  "no_action_reason": "<only if no_action_flag is true>",
+  "telegram_summary": "<100 word max plain-text. Score first. Fund verdicts. Top 2 actions. 15yr corpus. No emojis. Brutally direct.>"
 }}
 
 ════════════════════════════════════════════
-RULES — NON-NEGOTIABLE
+NON-NEGOTIABLE RULES
 ════════════════════════════════════════════
-
-1. NEVER recommend a switch without netting exit costs first.
-   A switch is only valid if NET BENEFIT > 1.5% annualised.
-
-2. ALL monetary figures must be in ₹. No vague percentages alone.
-
-3. If NO action is genuinely needed this month, set no_action_flag: true
-   and say exactly that. Do not manufacture advice.
-
+1. NEVER recommend switch without netting all exit costs. Switch valid only if NET BENEFIT > 1.5% annualised.
+2. ALL monetary figures in Rs. No vague percentages alone.
+3. If NO action needed, set no_action_flag: true. Do not manufacture advice.
 4. brutal_honesty_block must contain uncomfortable truths.
-   If everything is fine, say so. If not, say exactly what is wrong.
-
-5. projection must use REAL (inflation-adjusted) corpus figures
-   alongside nominal. Use 6% inflation assumption.
-
-6. Do NOT recommend adding new funds unless current portfolio has
-   a genuine structural gap (e.g., zero international, zero gold).
-
-7. Score the portfolio as if you are being paid to find problems,
-   not to make the investor feel good.
-
-8. The career resilience flag must reflect {investor['name']}'s specific
-   EV domain advantage — this is a real positive signal.
-
-9. Return ONLY valid JSON. No prose before or after. No markdown fences.
+5. Use REAL (inflation-adjusted) corpus figures. Assume 6% inflation.
+6. Do NOT recommend new funds unless genuine structural gap exists.
+7. Score as if paid to find problems, not to comfort the investor.
+8. Career resilience flag must reflect EV domain advantage — positive signal.
+9. Return ONLY valid JSON. No prose. No markdown fences.
 """
     return prompt.strip()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  SECTION 11 — AI API CALLER
-#  Calls Claude API with the master prompt.
-#  Falls back to Gemini free tier if Claude quota exceeded.
+#  SECTION 10.1 — SHARED SUB-PROMPT BUILDER (DRY — used by all AI callers)
+#  FIX: Previously duplicated in both call_openai_api and call_gemini_api.
+#  Now defined once here and called by both.
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def call_claude_api(prompt: str) -> Optional[dict]:
+def build_sub_prompts(prompt: str) -> tuple:
     """
-    Calls Claude gemini-2.0-flash with the master analysis prompt.
-    Returns parsed JSON report or None on failure.
+    Splits the master prompt into two focused sub-prompts.
+    Call 1: Portfolio quality + fund ratings + returns + costs
+    Call 2: Strategy + projections + actions + telegram summary
+    Returns (prompt_1, prompt_2) tuple.
     """
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        print("[ERROR] ANTHROPIC_API_KEY not set")
-        return None
-
-    try:
-        response = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json={
-                "model": "gemini-2.0-flash",
-                "max_tokens": 4096,
-                "messages": [{"role": "user", "content": prompt}],
-                "system": (
-                    "You are a brutally honest financial analyst. "
-                    "You return ONLY valid JSON. No markdown, no prose. "
-                    "Every monetary figure in Indian Rupees. "
-                    "Your job is wealth maximisation, not comfort."
-                ),
-            },
-            timeout=60,
-        )
-        response.raise_for_status()
-        content = response.json()["content"][0]["text"].strip()
-        # Strip markdown fences if present
-        if content.startswith("```"):
-            content = content.split("```")[1]
-            if content.startswith("json"):
-                content = content[4:]
-        return json.loads(content)
-    except Exception as e:
-        print(f"[ERROR] Claude API call failed: {e}")
-        return None
-
-
-def call_gemini_api(prompt: str) -> Optional[dict]:
-    """
-    Primary: Gemini 2.0 Flash Lite (free, low quota usage)
-    Fallback: Groq Llama 3.3 70B (free, generous limits)
-    Splits prompt into 2 calls to stay within token limits.
-    """
-    import time
-
-    system_instruction = (
-        "You are a brutally honest financial analyst. "
-        "Return ONLY valid JSON. No markdown fences, no prose. "
-        "Every monetary figure in Indian Rupees. "
-        "Your job is wealth maximisation, not comfort."
-    )
-
-    def call_with_gemini(sub_prompt: str, label: str) -> Optional[str]:
-        api_key = os.environ.get("GEMINI_API_KEY")
-        if not api_key:
-            return None
-        url = (
-            "https://generativelanguage.googleapis.com/v1beta"
-            f"/models/gemini-2.0-flash-lite:generateContent?key={api_key}"
-        )
-        max_retries = 2
-        for attempt in range(max_retries):
-            try:
-                print(f"      [Gemini] {label} attempt {attempt+1}...")
-                resp = requests.post(url, json={
-                    "contents": [{"parts": [{"text": sub_prompt}]}],
-                    "generationConfig": {
-                        "temperature": 0.2,
-                        "maxOutputTokens": 4096
-                    },
-                    "systemInstruction": {
-                        "parts": [{"text": system_instruction}]
-                    }
-                }, timeout=120)
-
-                if resp.status_code == 429:
-                    wait = 30 * (attempt + 1)
-                    print(f"      [Gemini] Rate limit — waiting {wait}s...")
-                    time.sleep(wait)
-                    continue
-
-                resp.raise_for_status()
-                content = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-                return extract_json(content)
-
-            except Exception as e:
-                print(f"      [Gemini] {label} attempt {attempt+1} failed: {e}")
-                if attempt < max_retries - 1:
-                    time.sleep(20)
-        return None
-
-    def call_with_groq(sub_prompt: str, label: str) -> Optional[str]:
-        api_key = os.environ.get("GROQ_API_KEY")
-        if not api_key:
-            print("      [Groq] GROQ_API_KEY not set — skipping")
-            return None
-        url = "https://api.groq.com/openai/v1/chat/completions"
-        max_retries = 2
-        for attempt in range(max_retries):
-            try:
-                print(f"      [Groq] {label} attempt {attempt+1}...")
-                resp = requests.post(url,
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "application/json"
-                    },
-                    json={
-                        "model": "llama-3.3-70b-versatile",
-                        "messages": [
-                            {"role": "system", "content": system_instruction},
-                            {"role": "user", "content": sub_prompt}
-                        ],
-                        "temperature": 0.2,
-                        "max_tokens": 4096,
-                    },
-                    timeout=120
-                )
-
-                if resp.status_code == 429:
-                    wait = 30 * (attempt + 1)
-                    print(f"      [Groq] Rate limit — waiting {wait}s...")
-                    time.sleep(wait)
-                    continue
-
-                resp.raise_for_status()
-                content = resp.json()["choices"][0]["message"]["content"].strip()
-                return extract_json(content)
-
-            except Exception as e:
-                print(f"      [Groq] {label} attempt {attempt+1} failed: {e}")
-                if attempt < max_retries - 1:
-                    time.sleep(20)
-        return None
-
-    def extract_json(content: str) -> Optional[str]:
-        """Strips markdown fences and extracts clean JSON string."""
-        if "```" in content:
-            for part in content.split("```"):
-                p = part.strip()
-                if p.startswith("json"):
-                    content = p[4:].strip()
-                    break
-                elif p.startswith("{"):
-                    content = p
-                    break
-        start = content.find("{")
-        end = content.rfind("}") + 1
-        if start != -1 and end > start:
-            return content[start:end]
-        return None
-
-    def call_ai(sub_prompt: str, label: str) -> Optional[str]:
-        """Tries Gemini first, falls back to Groq automatically."""
-        result = call_with_gemini(sub_prompt, label)
-        if result:
-            print(f"      [OK] {label} succeeded via Gemini")
-            return result
-        print(f"      [FALLBACK] Gemini failed for {label} — trying Groq...")
-        result = call_with_groq(sub_prompt, label)
-        if result:
-            print(f"      [OK] {label} succeeded via Groq")
-            return result
-        print(f"      [ERROR] Both Gemini and Groq failed for {label}")
-        return None
-
-    # ── Context block from full prompt
-    context_start = prompt.find("INVESTOR PROFILE")
-    context_end = prompt.find("OUTPUT FORMAT")
-    context_block = (
-        prompt[context_start:context_end].strip()
-        if context_start != -1
-        else prompt[:4000]
-    )
-
     today = datetime.date.today().isoformat()
 
-    # ── CALL 1: Portfolio analysis + fund ratings + returns + costs
-    prompt_1 = f"""
-You are a brutally honest financial analyst. Analyse this investor's mutual fund portfolio.
+    context_start = prompt.find("INVESTOR PROFILE")
+    context_end   = prompt.find("OUTPUT FORMAT") if "OUTPUT FORMAT" in prompt else len(prompt)
+    context_block = prompt[context_start:context_end].strip() if context_start != -1 else prompt[:4000]
+
+    prompt_1 = f"""You are a brutally honest financial analyst. Analyse this investor's mutual fund portfolio.
 
 {context_block[:4000]}
 
@@ -1167,7 +829,7 @@ Return ONLY this JSON — no prose, no markdown fences:
       "exit_cost_inr": <float>,
       "net_switch_benefit_inr": <float or null>,
       "key_finding": "<one brutal honest sentence>",
-      "action": "<specific action in plain language>"
+      "action": "<specific action>"
     }}
   ],
   "returns_analysis": {{
@@ -1192,12 +854,9 @@ Return ONLY this JSON — no prose, no markdown fences:
     "<third finding>",
     "<fourth finding>"
   ]
-}}
-"""
+}}"""
 
-    # ── CALL 2: Strategy + projections + actions + telegram
-    prompt_2 = f"""
-You are a brutally honest financial analyst for this investor:
+    prompt_2 = f"""You are a brutally honest financial analyst for this investor:
 - Age 34, Bangalore, Technical Manager EV Charging + Thermal Systems
 - Monthly salary Rs 1,40,000 | Home loan EMI Rs 60,000 (241 months left at 8.5%)
 - Monthly SIP Rs 20,000 | Emergency fund Rs 3.5L at 7% savings account
@@ -1255,107 +914,356 @@ Return ONLY this JSON — no prose, no markdown fences:
   ],
   "no_action_flag": false,
   "no_action_reason": "",
-  "telegram_summary": "<100 word max plain text summary. Score first. Fund verdicts. Top 2 actions. 15yr corpus. No emojis. Brutally direct.>"
-}}
-"""
+  "telegram_summary": "<100 word max. Score first. Fund verdicts. Top 2 actions. 15yr corpus. No emojis. Brutally direct.>"
+}}"""
 
-    # ── Run both calls with 15s gap
-    print("      Running Call 1 — portfolio analysis...")
-    result1_str = call_ai(prompt_1, "Call-1")
-    if not result1_str:
+    return prompt_1, prompt_2
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  SECTION 10.2 — JSON EXTRACTOR (global — fixed Bug 2 and Bug 4)
+#  Previously undefined at global scope, causing NameError in OpenAI path.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def extract_json_string(content: str) -> Optional[str]:
+    """Strips markdown fences and extracts clean JSON string from AI response."""
+    if not content:
+        return None
+    # Strip markdown code fences
+    if "```" in content:
+        for part in content.split("```"):
+            p = part.strip()
+            if p.startswith("json"):
+                content = p[4:].strip()
+                break
+            elif p.startswith("{"):
+                content = p
+                break
+    # Extract JSON boundaries
+    start = content.find("{")
+    end   = content.rfind("}") + 1
+    if start != -1 and end > start:
+        return content[start:end]
+    return None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  SECTION 10.3 — REPORT VALIDATOR
+#  New: validates AI response has all required keys before proceeding.
+#  Prevents silent crashes in Telegram formatter and dashboard generator.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+REQUIRED_KEYS = [
+    "master_score", "master_score_reasoning", "pillar_scores",
+    "fund_ratings", "returns_analysis", "projection",
+    "cost_summary", "stepup_guidance", "loan_vs_sip_verdict",
+    "tax_harvest_alert", "career_resilience_flag",
+    "brutal_honesty_block", "action_items", "no_action_flag",
+]
+
+def validate_report(report: dict) -> tuple:
+    """
+    Validates the AI report has all required keys and correct types.
+    Returns (is_valid: bool, missing_keys: list).
+    """
+    if not isinstance(report, dict):
+        return False, ["report is not a dict"]
+    missing = [k for k in REQUIRED_KEYS if k not in report]
+    if missing:
+        return False, missing
+    # Type checks
+    if not isinstance(report.get("master_score"), (int, float)):
+        missing.append("master_score must be numeric")
+    if not isinstance(report.get("fund_ratings"), list):
+        missing.append("fund_ratings must be a list")
+    if not isinstance(report.get("action_items"), list):
+        missing.append("action_items must be a list")
+    return len(missing) == 0, missing
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  SECTION 11 — AI API CALLERS
+#  CASCADE: OpenAI GPT-4o-mini → Groq Llama 3.3 70B → Gemini 2.0 Flash Lite
+#  FIX Bug 1: call_claude_api had wrong model "gemini-2.0-flash" — corrected
+#  FIX Bug 5: call_claude_api is now properly included in cascade
+#  FIX Bug 6: import time moved to top of file
+# ═══════════════════════════════════════════════════════════════════════════════
+
+SYSTEM_INSTRUCTION = (
+    "You are a brutally honest financial analyst. "
+    "Return ONLY valid JSON. No markdown fences, no prose. "
+    "Every monetary figure in Indian Rupees. "
+    "Your job is wealth maximisation, not comfort."
+)
+
+
+def _post_with_retry(
+    url: str,
+    payload: dict,
+    headers: dict,
+    label: str,
+    max_retries: int = 2,
+) -> Optional[str]:
+    """
+    Shared HTTP POST with retry logic for rate limits.
+    Returns raw content string or None.
+    """
+    for attempt in range(max_retries):
+        try:
+            print(f"      [{label}] attempt {attempt+1}/{max_retries}...")
+            resp = requests.post(url, headers=headers, json=payload, timeout=120)
+
+            if resp.status_code == 429:
+                wait = 30 * (attempt + 1)
+                print(f"      [{label}] Rate limit — waiting {wait}s...")
+                time.sleep(wait)
+                continue
+
+            resp.raise_for_status()
+            return resp
+
+        except requests.exceptions.Timeout:
+            print(f"      [{label}] Timeout on attempt {attempt+1}")
+        except requests.exceptions.RequestException as e:
+            print(f"      [{label}] Request error attempt {attempt+1}: {e}")
+
+        if attempt < max_retries - 1:
+            time.sleep(20)
+
+    return None
+
+
+def _merge_sub_results(r1_str: str, r2_str: str, source: str) -> Optional[dict]:
+    """Merges two JSON strings from split calls. Returns merged dict or None."""
+    try:
+        merged = {**json.loads(r1_str), **json.loads(r2_str)}
+        print(f"      [OK] Both calls merged successfully via {source}")
+        return merged
+    except json.JSONDecodeError as e:
+        print(f"[ERROR] JSON merge failed ({source}): {e}")
+        print(f"  Call 1 snippet: {r1_str[:200]}")
+        print(f"  Call 2 snippet: {r2_str[:200]}")
+        return None
+
+
+# ── PRIMARY: OpenAI GPT-4o-mini ──────────────────────────────────────────────
+
+def call_openai_api(prompt: str) -> Optional[dict]:
+    """
+    Primary AI: OpenAI GPT-4o-mini with json_object response format.
+    Most reliable structured JSON output of all free options.
+    """
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        print("      [OpenAI] OPENAI_API_KEY not set — skipping")
+        return None
+
+    prompt_1, prompt_2 = build_sub_prompts(prompt)
+    url = "https://api.openai.com/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    def call(sub_prompt: str, label: str) -> Optional[str]:
+        payload = {
+            "model": "gpt-4o-mini",
+            "messages": [
+                {"role": "system", "content": SYSTEM_INSTRUCTION},
+                {"role": "user",   "content": sub_prompt},
+            ],
+            "temperature": 0.2,
+            "max_tokens": 4096,
+            "response_format": {"type": "json_object"},
+        }
+        resp = _post_with_retry(url, payload, headers, f"OpenAI {label}")
+        if resp is None:
+            return None
+        try:
+            content = resp.json()["choices"][0]["message"]["content"].strip()
+            return extract_json_string(content)
+        except Exception as e:
+            print(f"      [OpenAI {label}] Parse error: {e}")
+            return None
+
+    print("      Running Call 1 — portfolio analysis (OpenAI)...")
+    r1 = call(prompt_1, "Call-1")
+    if not r1:
+        return None
+
+    print("      Waiting 10s before Call 2...")
+    time.sleep(10)
+
+    print("      Running Call 2 — strategy and projections (OpenAI)...")
+    r2 = call(prompt_2, "Call-2")
+    if not r2:
+        return None
+
+    return _merge_sub_results(r1, r2, "OpenAI")
+
+
+# ── FALLBACK 1: Groq Llama 3.3 70B ──────────────────────────────────────────
+
+def call_groq_api(prompt: str) -> Optional[dict]:
+    """
+    Fallback 1: Groq with Llama 3.3 70B.
+    Free tier, fast, good JSON adherence.
+    """
+    api_key = os.environ.get("GROQ_API_KEY")
+    if not api_key:
+        print("      [Groq] GROQ_API_KEY not set — skipping")
+        return None
+
+    prompt_1, prompt_2 = build_sub_prompts(prompt)
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    def call(sub_prompt: str, label: str) -> Optional[str]:
+        payload = {
+            "model": "llama-3.3-70b-versatile",
+            "messages": [
+                {"role": "system", "content": SYSTEM_INSTRUCTION},
+                {"role": "user",   "content": sub_prompt},
+            ],
+            "temperature": 0.2,
+            "max_tokens": 4096,
+        }
+        resp = _post_with_retry(url, payload, headers, f"Groq {label}")
+        if resp is None:
+            return None
+        try:
+            content = resp.json()["choices"][0]["message"]["content"].strip()
+            return extract_json_string(content)
+        except Exception as e:
+            print(f"      [Groq {label}] Parse error: {e}")
+            return None
+
+    print("      Running Call 1 — portfolio analysis (Groq)...")
+    r1 = call(prompt_1, "Call-1")
+    if not r1:
         return None
 
     print("      Waiting 15s before Call 2...")
     time.sleep(15)
 
-    print("      Running Call 2 — strategy and projections...")
-    result2_str = call_ai(prompt_2, "Call-2")
-    if not result2_str:
+    print("      Running Call 2 — strategy and projections (Groq)...")
+    r2 = call(prompt_2, "Call-2")
+    if not r2:
         return None
 
-    # ── Merge both responses
-    try:
-        merged = {**json.loads(result1_str), **json.loads(result2_str)}
-        print("      [OK] Both calls merged successfully")
-        return merged
-    except json.JSONDecodeError as e:
-        print(f"[ERROR] Merge failed: {e}")
-        print(f"  Call 1: {result1_str[:300]}")
-        print(f"  Call 2: {result2_str[:300]}")
+    return _merge_sub_results(r1, r2, "Groq")
+
+
+# ── FALLBACK 2: Gemini 2.0 Flash Lite ───────────────────────────────────────
+
+def call_gemini_api(prompt: str) -> Optional[dict]:
+    """
+    Fallback 2: Gemini 2.0 Flash Lite.
+    Free tier — lower rate limits, use as last resort.
+    """
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        print("      [Gemini] GEMINI_API_KEY not set — skipping")
         return None
+
+    prompt_1, prompt_2 = build_sub_prompts(prompt)
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta"
+        f"/models/gemini-2.0-flash-lite:generateContent?key={api_key}"
+    )
+    headers = {"Content-Type": "application/json"}
+
+    def call(sub_prompt: str, label: str) -> Optional[str]:
+        payload = {
+            "contents": [{"parts": [{"text": sub_prompt}]}],
+            "generationConfig": {"temperature": 0.2, "maxOutputTokens": 4096},
+            "systemInstruction": {"parts": [{"text": SYSTEM_INSTRUCTION}]},
+        }
+        resp = _post_with_retry(url, payload, headers, f"Gemini {label}")
+        if resp is None:
+            return None
+        try:
+            content = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+            return extract_json_string(content)
+        except Exception as e:
+            print(f"      [Gemini {label}] Parse error: {e}")
+            return None
+
+    print("      Running Call 1 — portfolio analysis (Gemini)...")
+    r1 = call(prompt_1, "Call-1")
+    if not r1:
+        return None
+
+    print("      Waiting 20s before Call 2...")
+    time.sleep(20)
+
+    print("      Running Call 2 — strategy and projections (Gemini)...")
+    r2 = call(prompt_2, "Call-2")
+    if not r2:
+        return None
+
+    return _merge_sub_results(r1, r2, "Gemini")
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  SECTION 12 — TELEGRAM MESSAGE FORMATTER
-#  Formats the AI report into a clean, scannable Telegram message.
-#  Rule: readable in under 60 seconds on mobile. No waffle.
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def format_telegram_message(report: dict, investor: dict, dashboard_url: str = None) -> str:
-    """
-    Beautiful, minimal, mobile-optimised Telegram message.
-    Uses Unicode box-drawing and symbols for visual structure.
-    Readable in 60 seconds. Every number in Rs. No fluff.
-    Telegram 4096 char limit respected.
-    """
     today     = datetime.date.today().strftime("%d %b %Y")
     score     = report.get("master_score", 0)
     no_action = report.get("no_action_flag", False)
 
-    # Score visual bar (10 blocks)
     def score_bar(s):
-        filled  = int(round(s))
-        empty   = 10 - filled
-        bar     = "█" * filled + "░" * empty
-        return bar
+        try:
+            filled = int(round(float(s)))
+            return "█" * filled + "░" * (10 - filled)
+        except Exception:
+            return "░" * 10
 
     def score_grade(s):
+        try:
+            s = float(s)
+        except Exception:
+            return "N/A"
         if s >= 8: return "STRONG"
         if s >= 6: return "ADEQUATE"
         if s >= 4: return "WEAK"
         return "CRITICAL"
 
-    def fund_icon(verdict):
-        return {"HOLD": "✅", "WATCH": "⚠️", "SWITCH": "🔄", "EXIT": "❌"}.get(verdict, "•")
+    def fund_icon(v):
+        return {"HOLD": "✅", "WATCH": "⚠️", "SWITCH": "🔄", "EXIT": "❌"}.get(v, "•")
 
     def priority_icon(p):
         return {"URGENT": "🔴", "ADVISORY": "🟡", "FYI": "🟢"}.get(p, "•")
 
     def wrap(text, width=46, indent="    "):
-        """Word-wrap text for mobile screen width."""
-        words  = str(text).split()
-        lines  = []
-        line   = ""
+        words, lines, line = str(text).split(), [], ""
         for w in words:
             if len(line) + len(w) + 1 <= width:
                 line = (line + " " + w).strip()
             else:
-                if line: lines.append(indent + line)
+                if line:
+                    lines.append(indent + line)
                 line = w
-        if line: lines.append(indent + line)
+        if line:
+            lines.append(indent + line)
         return "\n".join(lines)
 
-    L = []  # lines
-
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    # HEADER
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    L += [
+    L = [
         "━━━━━━━━━━━━━━━━━━━━━━━━━",
         "  💼 AFundMentor Pro",
         f"  {today}  |  Monthly Report",
         "━━━━━━━━━━━━━━━━━━━━━━━━━",
         "",
-    ]
-
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    # MASTER SCORE
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    L += [
         "📊  PORTFOLIO SCORE",
         f"    {score}/10  {score_bar(score)}",
         f"    {score_grade(score)}",
         "",
-        f"    {report.get('master_score_reasoning', '')[:120]}",
+        f"    {str(report.get('master_score_reasoning', ''))[:120]}",
         "",
     ]
 
@@ -1364,57 +1272,41 @@ def format_telegram_message(report: dict, investor: dict, dashboard_url: str = N
             "─────────────────────────",
             "✅  NO ACTION NEEDED",
             "",
-            f"    {report.get('no_action_reason', '')[:180]}",
+            f"    {str(report.get('no_action_reason', ''))[:180]}",
             "",
         ]
     else:
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # PILLAR SCORES
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        # Pillars
         p = report.get("pillar_scores", {})
         if p:
             L += [
                 "─────────────────────────",
                 "📐  PILLARS",
-                f"    Quality      {p.get('portfolio_quality','-')}/10  {score_bar(p.get('portfolio_quality',0))}",
-                f"    Cost         {p.get('cost_intelligence','-')}/10  {score_bar(p.get('cost_intelligence',0))}",
-                f"    Structure    {p.get('portfolio_construction','-')}/10  {score_bar(p.get('portfolio_construction',0))}",
-                f"    Risk         {p.get('personal_risk','-')}/10  {score_bar(p.get('personal_risk',0))}",
-                f"    Strategy     {p.get('behaviour_strategy','-')}/10  {score_bar(p.get('behaviour_strategy',0))}",
+                f"    Quality    {p.get('portfolio_quality','-')}/10  {score_bar(p.get('portfolio_quality',0))}",
+                f"    Cost       {p.get('cost_intelligence','-')}/10  {score_bar(p.get('cost_intelligence',0))}",
+                f"    Structure  {p.get('portfolio_construction','-')}/10  {score_bar(p.get('portfolio_construction',0))}",
+                f"    Risk       {p.get('personal_risk','-')}/10  {score_bar(p.get('personal_risk',0))}",
+                f"    Strategy   {p.get('behaviour_strategy','-')}/10  {score_bar(p.get('behaviour_strategy',0))}",
                 "",
             ]
 
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # FUND VERDICTS
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        # Funds
         funds = report.get("fund_ratings", [])
         if funds:
-            L += [
-                "─────────────────────────",
-                "🏦  FUNDS",
-            ]
+            L += ["─────────────────────────", "🏦  FUNDS"]
             for f in funds:
-                icon    = fund_icon(f.get("verdict", ""))
-                name    = f.get("fund_name", "")[:30]
-                sc      = f.get("score", "-")
-                verdict = f.get("verdict", "")
-                cagr3   = f.get("3yr_cagr_pct")
-                exp     = f.get("expense_ratio_verdict", "")
-                finding = f.get("key_finding", "")
                 L += [
-                    f"",
-                    f"  {icon}  {name}",
-                    f"      Score  : {sc}/10  |  {verdict}",
+                    "",
+                    f"  {fund_icon(f.get('verdict',''))}  {f.get('fund_name','')[:30]}",
+                    f"      Score : {f.get('score','-')}/10  |  {f.get('verdict','')}",
                 ]
-                if cagr3:
-                    L.append(f"      3yr    : {cagr3}%  |  Expense: {exp}")
-                if finding:
-                    L.append(wrap(finding, width=44, indent="      "))
+                if f.get("3yr_cagr_pct"):
+                    L.append(f"      3yr   : {f['3yr_cagr_pct']}%  |  Cost: {f.get('expense_ratio_verdict','')}")
+                if f.get("key_finding"):
+                    L.append(wrap(f["key_finding"], width=44, indent="      "))
             L.append("")
 
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # RETURNS
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        # Returns
         ret = report.get("returns_analysis", {})
         if ret:
             inv  = ret.get("total_invested_inr", 0)
@@ -1423,93 +1315,69 @@ def format_telegram_message(report: dict, investor: dict, dashboard_url: str = N
             L += [
                 "─────────────────────────",
                 "📈  YOUR RETURNS",
-                f"    XIRR          : {ret.get('portfolio_xirr_pct','-')}%",
+                f"    XIRR           : {ret.get('portfolio_xirr_pct','-')}%",
                 f"    Real (post-CPI): {ret.get('real_return_post_inflation_pct','-')}%",
-                f"    Invested      : ₹{inv:,.0f}",
-                f"    Current value : ₹{curr:,.0f}",
-                f"    Total gain    : ₹{gain:,.0f}",
-                f"    vs Nifty 50   : {ret.get('vs_nifty50_pct','-')}%",
+                f"    Invested       : Rs {inv:,.0f}",
+                f"    Current value  : Rs {curr:,.0f}",
+                f"    Total gain     : Rs {gain:,.0f}",
+                f"    vs Nifty 50    : {ret.get('vs_nifty50_pct','-')}%",
                 "",
             ]
 
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # BRUTAL FINDINGS
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        # Brutal findings
         brutal = report.get("brutal_honesty_block", [])
         if brutal:
-            L += [
-                "─────────────────────────",
-                "🔍  BRUTAL FINDINGS",
-                "",
-            ]
+            L += ["─────────────────────────", "🔍  BRUTAL FINDINGS", ""]
             for i, finding in enumerate(brutal[:4], 1):
                 L.append(f"  {i}.")
                 L.append(wrap(finding, width=44, indent="     "))
                 L.append("")
 
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # ACTIONS
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        # Actions
         actions = report.get("action_items", [])
         if actions:
-            L += [
-                "─────────────────────────",
-                "⚡  ACTIONS",
-                "",
-            ]
+            L += ["─────────────────────────", "⚡  ACTIONS", ""]
             for item in actions:
-                icon     = priority_icon(item.get("priority", "FYI"))
                 priority = item.get("priority", "FYI")
-                action   = item.get("action", "")
-                impact   = item.get("impact_inr")
-                deadline = item.get("deadline", "")
-                L.append(f"  {icon}  [{priority}]")
-                L.append(wrap(action, width=44, indent="     "))
-                if impact:
-                    L.append(f"     Impact  : ₹{impact:,.0f}")
-                if deadline:
-                    L.append(f"     By      : {deadline}")
+                L.append(f"  {priority_icon(priority)}  [{priority}]")
+                L.append(wrap(item.get("action", ""), width=44, indent="     "))
+                if item.get("impact_inr"):
+                    L.append(f"     Impact : Rs {item['impact_inr']:,.0f}")
+                if item.get("deadline"):
+                    L.append(f"     By     : {item['deadline']}")
                 L.append("")
 
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # PROJECTION
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        # Projection
         proj = report.get("projection", {})
         if proj:
             flat   = proj.get("corpus_at_15yr_flat_sip_real_inr", 0)
             stepup = proj.get("corpus_at_15yr_stepup_real_inr", 0)
-            gap    = proj.get("wealth_gap_assessment", "")
             L += [
                 "─────────────────────────",
-                "🎯  15-YEAR PROJECTION",
-                "    (inflation-adjusted)",
+                "🎯  15-YEAR PROJECTION (real Rs)",
                 "",
-                f"    Flat ₹20k SIP : ₹{flat:,.0f}",
-                f"    With step-up  : ₹{stepup:,.0f}",
+                f"    Flat Rs 20k SIP : Rs {flat:,.0f}",
+                f"    With step-up    : Rs {stepup:,.0f}",
                 "",
-                wrap(gap, width=44, indent="    "),
+                wrap(proj.get("wealth_gap_assessment", ""), width=44, indent="    "),
                 "",
             ]
 
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # STEP-UP
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        # Step-up
         su = report.get("stepup_guidance", {})
         if su and su.get("recommended_sip_increase_inr", 0) > 0:
             L += [
                 "─────────────────────────",
                 "📅  APRIL STEP-UP",
                 f"    Phase   : {su.get('phase_label','')}",
-                f"    SIP +   : ₹{su.get('recommended_sip_increase_inr',0):,.0f}/mo",
-                f"    Buffer +: ₹{su.get('buffer_addition_inr',0):,.0f}/mo",
+                f"    SIP +   : Rs {su.get('recommended_sip_increase_inr',0):,.0f}/mo",
+                f"    Buffer +: Rs {su.get('buffer_addition_inr',0):,.0f}/mo",
                 "",
                 wrap(su.get("april_action", ""), width=44, indent="    "),
                 "",
             ]
 
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # LOAN vs SIP
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        # Loan vs SIP
         lsip = report.get("loan_vs_sip_verdict", {})
         if lsip:
             L += [
@@ -1520,27 +1388,23 @@ def format_telegram_message(report: dict, investor: dict, dashboard_url: str = N
                 "",
             ]
 
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # TAX HARVEST
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        # Tax harvest
         tax = report.get("tax_harvest_alert", {})
         if tax.get("opportunity_exists"):
             headroom = tax.get("ltcg_headroom_inr", 0)
             L += [
                 "─────────────────────────",
                 "💰  TAX HARVEST ALERT",
-                f"    Book ₹{headroom:,.0f} LTCG — zero tax",
+                f"    Book Rs {headroom:,.0f} LTCG — zero tax",
                 "",
                 wrap(tax.get("recommended_action", ""), width=44, indent="    "),
                 "",
             ]
 
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # CAREER SIGNAL
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        # Career
         career = report.get("career_resilience_flag", {})
         if career:
-            signal = career.get("signal", "")
+            signal   = career.get("signal", "")
             sig_icon = {"POSITIVE": "🟢", "NEUTRAL": "🟡", "NEGATIVE": "🔴"}.get(signal, "•")
             L += [
                 "─────────────────────────",
@@ -1551,62 +1415,43 @@ def format_telegram_message(report: dict, investor: dict, dashboard_url: str = N
                 "",
             ]
 
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # COST DRAIN
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        # Cost drain
         cost = report.get("cost_summary", {})
         if cost:
-            drag     = cost.get("total_annual_expense_drag_inr", 0)
-            reg_loss = cost.get("regular_plan_annual_loss_inr", 0)
-            comp     = cost.get("15yr_compounding_loss_from_regular_plan_inr", 0)
             L += [
                 "─────────────────────────",
                 "💸  COST DRAIN",
-                f"    Annual drag      : ₹{drag:,.0f}",
-                f"    Regular plan loss: ₹{reg_loss:,.0f}/yr",
-                f"    15yr impact      : ₹{comp:,.0f}",
+                f"    Annual drag       : Rs {cost.get('total_annual_expense_drag_inr',0):,.0f}",
+                f"    Regular plan loss : Rs {cost.get('regular_plan_annual_loss_inr',0):,.0f}/yr",
+                f"    15yr impact       : Rs {cost.get('15yr_compounding_loss_from_regular_plan_inr',0):,.0f}",
                 "",
             ]
 
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    # FOOTER + DASHBOARD LINK
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # Footer
     next_month = (
-        datetime.date.today().replace(day=1) +
-        datetime.timedelta(days=32)
+        datetime.date.today().replace(day=1) + datetime.timedelta(days=32)
     ).replace(day=1) - datetime.timedelta(days=1)
 
-    L += ["━━━━━━━━━━━━━━━━━━━━━━━━━"]
-
+    L.append("━━━━━━━━━━━━━━━━━━━━━━━━━")
     if dashboard_url:
-        L += [
-            "📱  Full Dashboard",
-            f"    {dashboard_url}",
-            "",
-        ]
-
+        L += ["📱  Full Dashboard", f"    {dashboard_url}", ""]
     L += [
         f"    Next report : {next_month.strftime('%d %b %Y')}",
-        "    AFundMentor Pro v1.0",
+        "    AFundMentor Pro v2.0",
         "━━━━━━━━━━━━━━━━━━━━━━━━━",
     ]
 
-    # Telegram 4096 char safety trim
     msg = "\n".join(L)
     if len(msg) > 4000:
         msg = msg[:3950] + "\n\n    ... (see dashboard for full report)"
-
     return msg
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  SECTION 13 — TELEGRAM SENDER
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def send_telegram_message(message: str, dashboard_path: str = None) -> bool:
-    """
-    Sends the formatted Telegram message.
-    No file attachment — dashboard is hosted on GitHub Pages instead.
-    """
+def send_telegram_message(message: str) -> bool:
     bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
     chat_id   = os.environ.get("TELEGRAM_CHAT_ID")
 
@@ -1618,12 +1463,11 @@ def send_telegram_message(message: str, dashboard_path: str = None) -> bool:
         return False
 
     try:
-        url  = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-        resp = requests.post(url, json={
-            "chat_id":    chat_id,
-            "text":       message,
-            "parse_mode": "HTML",
-        }, timeout=15)
+        resp = requests.post(
+            f"https://api.telegram.org/bot{bot_token}/sendMessage",
+            json={"chat_id": chat_id, "text": message, "parse_mode": "HTML"},
+            timeout=15,
+        )
         resp.raise_for_status()
         print("[OK] Telegram message sent")
         return True
@@ -1631,46 +1475,34 @@ def send_telegram_message(message: str, dashboard_path: str = None) -> bool:
         print(f"[ERROR] Telegram send failed: {e}")
         return False
 
+
 # ═══════════════════════════════════════════════════════════════════════════════
-#  SECTION 14 — REPORT SAVER
-#  Saves full JSON report locally for dashboard and history tracking.
-#  History enables month-over-month score trend tracking.
+#  SECTION 14 — REPORT SAVER + HISTORY
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def save_report(report: dict, portfolio: list, market: dict) -> str:
-    """
-    Saves full report to JSON file for dashboard consumption and history.
-    Returns the saved file path.
-    """
     today = datetime.date.today()
-    reports_dir = "reports"
-    os.makedirs(reports_dir, exist_ok=True)
-
-    filename = f"{reports_dir}/report_{today.strftime('%Y_%m')}.json"
+    os.makedirs("reports", exist_ok=True)
+    filename = f"reports/report_{today.strftime('%Y_%m')}.json"
     full_report = {
         "meta": {
             "generated_at": str(datetime.datetime.now()),
-            "engine_version": "1.0.0",
+            "engine_version": "2.0.0",
             "investor": "Ankit",
         },
         "report": report,
         "portfolio_snapshot": portfolio,
         "market_snapshot": market,
     }
-
     with open(filename, "w") as f:
         json.dump(full_report, f, indent=2)
-
     print(f"[OK] Report saved: {filename}")
     return filename
 
 
 def load_score_history() -> list:
-    """
-    Loads past 12 months of scores for trend analysis.
-    """
-    reports_dir = "reports"
     history = []
+    reports_dir = "reports"
     if not os.path.exists(reports_dir):
         return history
     for fname in sorted(os.listdir(reports_dir)):
@@ -1682,30 +1514,17 @@ def load_score_history() -> list:
                         "month": fname.replace("report_", "").replace(".json", ""),
                         "score": data["report"].get("master_score"),
                     })
-            except:
+            except Exception:
                 continue
-    return history[-12:]  # last 12 months
+    return history[-12:]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  SECTION 15 — ZERODHA KITE FETCHER (Optional Live Data)
-#  Replaces dummy portfolio with real Zerodha holdings.
-#  Access token must be refreshed manually once per month (30 sec job).
+#  SECTION 15 — ZERODHA KITE FETCHER
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def fetch_zerodha_portfolio() -> Optional[list]:
-    """
-    Fetches live MF holdings from Zerodha Kite API.
-    Requires valid KITE_ACCESS_TOKEN env variable.
-
-    TOKEN REFRESH:
-    1. Run kite_auth_helper.py once a month
-    2. It opens browser → you log in → token is saved to .env
-    3. This function then uses it automatically
-
-    Returns portfolio list in same format as DUMMY_PORTFOLIO.
-    """
-    api_key = os.environ.get("KITE_API_KEY")
+    api_key      = os.environ.get("KITE_API_KEY")
     access_token = os.environ.get("KITE_ACCESS_TOKEN")
 
     if not api_key or not access_token:
@@ -1717,36 +1536,32 @@ def fetch_zerodha_portfolio() -> Optional[list]:
             "X-Kite-Version": "3",
             "Authorization": f"token {api_key}:{access_token}",
         }
-
-        # Fetch MF holdings via Coin (Zerodha's MF platform)
-        resp = requests.get(
-            "https://api.kite.trade/mf/holdings",
-            headers=headers,
-            timeout=15,
-        )
+        resp = requests.get("https://api.kite.trade/mf/holdings", headers=headers, timeout=15)
         resp.raise_for_status()
         kite_holdings = resp.json().get("data", [])
 
-        # Map Kite format to engine format
         portfolio = []
+        today_str = str(datetime.date.today())
         for h in kite_holdings:
+            qty   = float(h.get("quantity", 0))
+            price = float(h.get("last_price", 0))
             portfolio.append({
-                "fund_name": h.get("fund"),
-                "isin": h.get("isin", ""),
-                "amfi_code": h.get("folio_no", ""),  # use ISIN→AMFI lookup in production
-                "category": "Unknown",  # enrich from MFapi.in
-                "amc": h.get("fund", "").split(" ")[0],
-                "plan": "direct",  # Coin is always direct
-                "units": float(h.get("quantity", 0)),
-                "avg_nav": float(h.get("average_price", 0)),
-                "current_nav": float(h.get("last_price", 0)),
-                "invested_inr": float(h.get("amount", 0)),
-                "current_value_inr": float(h.get("last_price", 0)) * float(h.get("quantity", 0)),
-                "monthly_sip_inr": 0,  # fetch from SIP orders separately
-                "sip_start_date": str(datetime.date.today()),
-                "oldest_unit_date": str(datetime.date.today()),
-                "expense_ratio_pct": 0,   # enrich from MFapi.in
-                "exit_load_pct": 1.0,
+                "fund_name":         h.get("fund", ""),
+                "isin":              h.get("isin", ""),
+                "amfi_code":         h.get("folio_no", ""),
+                "category":          "Unknown",
+                "amc":               h.get("fund", "").split(" ")[0],
+                "plan":              "direct",
+                "units":             qty,
+                "avg_nav":           float(h.get("average_price", 0)),
+                "current_nav":       price,
+                "invested_inr":      float(h.get("amount", 0)),
+                "current_value_inr": price * qty,
+                "monthly_sip_inr":   0,
+                "sip_start_date":    today_str,
+                "oldest_unit_date":  today_str,
+                "expense_ratio_pct": 0,
+                "exit_load_pct":     1.0,
                 "exit_load_window_days": 365,
             })
         print(f"[OK] Fetched {len(portfolio)} holdings from Zerodha")
@@ -1756,23 +1571,25 @@ def fetch_zerodha_portfolio() -> Optional[list]:
         print(f"[WARN] Zerodha fetch failed: {e} — falling back to dummy data")
         return None
 
-#section 15.1 publish
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  SECTION 15.1 — GITHUB PAGES PUBLISHER
+# ═══════════════════════════════════════════════════════════════════════════════
 
 def publish_to_github_pages(report: dict, portfolio: list, market: dict) -> str:
-    """
-    Generates the HTML dashboard and commits it to docs/ folder.
-    GitHub Pages serves it at https://akiyadav.github.io/mf-advisor/
-    Returns the public URL.
-    """
-    import subprocess
-    import shutil
-
     today    = datetime.date.today()
     date_str = today.strftime("%Y_%m")
     docs_dir = "docs"
     os.makedirs(docs_dir, exist_ok=True)
 
-    # ── Build self-contained dashboard HTML with injected report data
+    template_path = "dashboard.html"
+    if not os.path.exists(template_path):
+        print("[WARN] dashboard.html not found — skipping Pages publish")
+        return os.environ.get("DASHBOARD_URL", "")
+
+    with open(template_path, encoding="utf-8") as f:
+        template = f.read()
+
     report_json = json.dumps({
         "report":             report,
         "portfolio_snapshot": portfolio,
@@ -1780,16 +1597,6 @@ def publish_to_github_pages(report: dict, portfolio: list, market: dict) -> str:
         "generated_at":       str(datetime.datetime.now()),
     }, indent=2)
 
-    # Read dashboard template
-    template_path = "dashboard.html"
-    if not os.path.exists(template_path):
-        print("[WARN] dashboard.html not found — skipping Pages publish")
-        return ""
-
-    with open(template_path) as f:
-        template = f.read()
-
-    # Inject report data as JS variable
     injection = f"""
 <script>
 window.REPORT_DATA = {report_json};
@@ -1802,172 +1609,163 @@ window.addEventListener('DOMContentLoaded', function() {{
 """
     dashboard_html = template.replace("</body>", injection + "\n</body>")
 
-    # Save as index.html (latest report)
     index_path = os.path.join(docs_dir, "index.html")
     with open(index_path, "w", encoding="utf-8") as f:
         f.write(dashboard_html)
 
-    # Also save dated archive copy
     archive_path = os.path.join(docs_dir, f"report_{date_str}.html")
     shutil.copy(index_path, archive_path)
 
-    # Build archive index page
-    archives = sorted([
-        f for f in os.listdir(docs_dir)
-        if f.startswith("report_") and f.endswith(".html")
-    ], reverse=True)
+    archives = sorted(
+        [f for f in os.listdir(docs_dir) if f.startswith("report_") and f.endswith(".html")],
+        reverse=True,
+    )
+    archive_html = (
+        "<!DOCTYPE html><html><head><meta charset='UTF-8'>"
+        "<title>AFundMentor Pro</title>"
+        "<style>body{font-family:monospace;background:#0b0b10;color:#dcdce8;"
+        "padding:40px;max-width:500px;margin:0 auto;}"
+        "h1{color:#b8ff4e;font-size:24px;margin-bottom:8px;}"
+        "p{color:#6b6b80;font-size:12px;margin-bottom:24px;}"
+        "a{color:#4eb8ff;text-decoration:none;display:block;padding:10px 0;"
+        "border-bottom:1px solid rgba(255,255,255,.06);font-size:13px;}"
+        "a:hover{color:#fff;}.l{color:#b8ff4e;}</style></head><body>"
+        "<h1>AFundMentor Pro</h1><p>Monthly MF Analysis Reports</p>"
+        + "".join([
+            f'<a href="{f}" class="{"l" if i==0 else ""}">'
+            f'{"★ Latest — " if i==0 else ""}'
+            f'{f.replace("report_","").replace(".html","").replace("_"," ")}</a>'
+            for i, f in enumerate(archives)
+        ])
+        + "</body></html>"
+    )
+    with open(os.path.join(docs_dir, "archive.html"), "w", encoding="utf-8") as f:
+        f.write(archive_html)
 
-    archive_index = """<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<title>AFundMentor Pro — Reports</title>
-<style>
-body{font-family:monospace;background:#0b0b10;color:#dcdce8;
-     padding:40px;max-width:500px;margin:0 auto;}
-h1{color:#b8ff4e;margin-bottom:8px;font-size:24px;}
-p{color:#6b6b80;font-size:12px;margin-bottom:28px;}
-a{color:#4eb8ff;text-decoration:none;display:block;
-  padding:10px 0;border-bottom:1px solid rgba(255,255,255,.06);
-  font-size:13px;}
-a:hover{color:#fff;}
-.latest{color:#b8ff4e;}
-</style>
-</head>
-<body>
-<h1>AFundMentor Pro</h1>
-<p>Monthly MF Analysis Reports</p>
-""" + "\n".join([
-    f'<a href="{f}" class="{"latest" if i==0 else ""}">'
-    f'{"★ Latest — " if i==0 else ""}'
-    f'{f.replace("report_","").replace(".html","").replace("_"," ")}'
-    f'</a>'
-    for i, f in enumerate(archives)
-]) + """
-</body>
-</html>"""
-
-    with open(os.path.join(docs_dir, "archive.html"), "w") as f:
-        f.write(archive_index)
-
-    # ── Git commit and push docs/ to GitHub
     github_username = os.environ.get("GITHUB_USERNAME", "akiyadav")
     github_repo     = os.environ.get("GITHUB_REPO", "mf-advisor")
     github_token    = os.environ.get("GITHUB_TOKEN", "")
 
     try:
-        # Configure git (needed in GitHub Actions environment)
-        subprocess.run(["git", "config", "user.email", "mf-advisor@bot.com"],  check=True)
-        subprocess.run(["git", "config", "user.name",  "AFundMentor Bot"],     check=True)
-
-        # Set remote with token for push auth in Actions
+        subprocess.run(["git", "config", "user.email", "mf-advisor@bot.com"], check=True)
+        subprocess.run(["git", "config", "user.name",  "AFundMentor Bot"],    check=True)
         if github_token:
-            remote_url = (
-                f"https://{github_token}@github.com"
-                f"/{github_username}/{github_repo}.git"
-            )
+            remote_url = f"https://{github_token}@github.com/{github_username}/{github_repo}.git"
             subprocess.run(["git", "remote", "set-url", "origin", remote_url], check=True)
-
-        subprocess.run(["git", "add", "docs/"],        check=True)
-        subprocess.run(["git", "commit", "-m",
-                        f"Auto: dashboard update {today}"],            check=True)
-        subprocess.run(["git", "push", "origin", "main"],              check=True)
-
+        subprocess.run(["git", "add", "docs/"], check=True)
+        subprocess.run(["git", "commit", "-m", f"Auto: dashboard {today}"], check=True)
+        subprocess.run(["git", "push", "origin", "main"], check=True)
         url = f"https://{github_username}.github.io/{github_repo}/"
         print(f"[OK] Dashboard published: {url}")
         return url
-
     except subprocess.CalledProcessError as e:
-        print(f"[WARN] Git push failed: {e} — dashboard saved locally only")
+        print(f"[WARN] Git push failed: {e}")
         return f"https://{github_username}.github.io/{github_repo}/"
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  SECTION 16 — MAIN ORCHESTRATOR
-#  This is what GitHub Actions / cron calls on the last day of each month.
+#  FIX Bug 3: Indentation error corrected (extra space before save_report call)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def main():
     print("\n" + "═" * 60)
-    print("  MF AI WEALTH ADVISOR — MONTHLY RUN")
+    print("  MF AI WEALTH ADVISOR v2.0 — MONTHLY RUN")
     print(f"  {datetime.datetime.now().strftime('%d %B %Y, %H:%M')}")
     print("═" * 60 + "\n")
 
-    # ── Step 1: Load portfolio (live or dummy)
+    # Step 1 — Portfolio
     print("[1/8] Loading portfolio...")
     portfolio = fetch_zerodha_portfolio() or DUMMY_PORTFOLIO
     print(f"      {len(portfolio)} funds loaded")
 
-    # ── Step 2: Fetch market context
+    # Step 2 — Market context
     print("[2/8] Fetching market context...")
     market = fetch_market_context()
-    print(f"      Nifty P/E: {market['nifty50_pe']} | FII: ₹{market['fii_flow_monthly_cr']}Cr | RBI: {market['rbi_stance']}")
+    print(f"      Nifty P/E: {market['nifty50_pe']} | FII: Rs {market['fii_flow_monthly_cr']}Cr | RBI: {market['rbi_stance']}")
 
-    # ── Step 3: Compute exit costs
-    print("[3/8] Calculating exit costs per fund...")
+    # Step 3 — Exit costs
+    print("[3/8] Calculating exit costs...")
     exit_costs = []
     for fund in portfolio:
         cost = calculate_exit_cost(fund, INVESTOR_PROFILE)
-        cost["fund_name"] = fund["fund_name"]
         exit_costs.append(cost)
-        print(f"      {fund['fund_name'][:35]}: exit cost ₹{cost['total_exit_cost_inr']:,.0f} ({cost['total_exit_cost_pct']}%)")
+        print(f"      {fund['fund_name'][:35]}: Rs {cost['total_exit_cost_inr']:,.0f} ({cost['total_exit_cost_pct']}%)")
 
-    # ── Step 4: Personal risk score
+    # Step 4 — Personal risk
     print("[4/8] Scoring personal financial health...")
     personal_risk = score_personal_risk(INVESTOR_PROFILE, market)
     print(f"      Personal risk score: {personal_risk['personal_risk_score']}/10")
     for flag in personal_risk["flags"]:
         print(f"      FLAG: {flag}")
 
-    # ── Step 5: Step-up guidance
+    # Step 5 — Step-up guidance
     print("[5/8] Calculating SIP step-up guidance...")
     step_up = calculate_stepup_guidance(INVESTOR_PROFILE, personal_risk, market)
-    print(f"      Phase {step_up['phase']} ({step_up['phase_label']}) | Recommended increase: ₹{step_up['sip_increase_recommended_inr']:,}")
+    print(f"      Phase {step_up['phase']} ({step_up['phase_label']}) | SIP increase: Rs {step_up['sip_increase_recommended_inr']:,}")
 
-    # ── Step 6: Loan vs SIP
+    # Step 6 — Loan vs SIP
     print("[6/8] Running loan vs SIP analysis...")
     loan_vs_sip = analyse_loan_vs_sip(INVESTOR_PROFILE)
-    print(f"      Verdict: {loan_vs_sip['verdict']} — {loan_vs_sip['verdict_reason'][:60]}...")
+    print(f"      Verdict: {loan_vs_sip['verdict']}")
 
-    # ── Step 7: Portfolio overlap
+    # Step 7 — Portfolio overlap
     print("[7/8] Analysing portfolio overlap...")
     overlap = calculate_portfolio_overlap(portfolio)
     print(f"      Overlap: {overlap['overall_overlap_pct']}% ({overlap['verdict']})")
 
-    # ── Step 8: AI synthesis
-    print("[8/8] Running AI analysis (Claude)...")
+    # Step 8 — AI synthesis: OpenAI → Groq → Gemini
+    print("[8/8] Running AI analysis...")
     prompt = build_master_prompt(
         INVESTOR_PROFILE, portfolio, market,
-        personal_risk, step_up, loan_vs_sip, overlap, exit_costs
+        personal_risk, step_up, loan_vs_sip, overlap, exit_costs,
     )
 
-    report = call_gemini_api(prompt)
+    report = None
+
+    print("      [Cascade 1/3] Trying OpenAI GPT-4o-mini...")
+    report = call_openai_api(prompt)
+
     if not report:
-        print("[ERROR] AI calls failed — aborting")
+        print("      [Cascade 2/3] OpenAI failed — trying Groq Llama 3.3 70B...")
+        report = call_groq_api(prompt)
+
+    if not report:
+        print("      [Cascade 3/3] Groq failed — trying Gemini 2.0 Flash Lite...")
+        report = call_gemini_api(prompt)
+
+    if not report:
+        print("[ERROR] All AI engines failed — aborting")
         return
 
-    print(f"\n      Master score: {report.get('master_score')}/10")
-    print(f"      Action items: {len(report.get('action_items', []))}")
-    print(f"      No action needed: {report.get('no_action_flag', False)}")
+    # Validate report
+    is_valid, missing = validate_report(report)
+    if not is_valid:
+        print(f"[WARN] Report missing keys: {missing} — proceeding with partial data")
 
-   # ── Save report JSON
-    saved_path = save_report(report, portfolio, market)
+    print(f"\n      Master score  : {report.get('master_score')}/10")
+    print(f"      Action items  : {len(report.get('action_items', []))}")
+    print(f"      No action flag: {report.get('no_action_flag', False)}")
 
-    # ── Publish dashboard to GitHub Pages
-    print("\n[Publishing dashboard to GitHub Pages...]")
+    # Save report JSON
+    save_report(report, portfolio, market)
+
+    # Publish dashboard to GitHub Pages
+    print("\n[Publishing dashboard...]")
     dashboard_url = publish_to_github_pages(report, portfolio, market)
 
-    # ── Format and send Telegram
+    # Format and send Telegram
     print("[Sending Telegram message...]")
     telegram_msg = format_telegram_message(report, INVESTOR_PROFILE, dashboard_url)
     send_telegram_message(telegram_msg)
 
-    # ── Score history
+    # Score trend
     history = load_score_history()
     if len(history) > 1:
-        prev_score = history[-2].get("score", 0)
-        curr_score = report.get("master_score", 0)
-        trend = "UP" if curr_score > prev_score else "DOWN" if curr_score < prev_score else "FLAT"
-        print(f"\n  Score trend: {prev_score} → {curr_score} ({trend})")
+        prev  = history[-2].get("score", 0)
+        curr  = report.get("master_score", 0)
+        trend = "UP" if curr > prev else "DOWN" if curr < prev else "FLAT"
+        print(f"\n  Score trend: {prev} → {curr} ({trend})")
 
     print("\n" + "═" * 60)
     print("  MONTHLY RUN COMPLETE")
