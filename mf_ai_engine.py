@@ -995,20 +995,14 @@ def call_claude_api(prompt: str) -> Optional[dict]:
         print(f"[ERROR] Claude API call failed: {e}")
         return None
 
+
 def call_gemini_api(prompt: str) -> Optional[dict]:
     """
-    Splits the large prompt into two focused calls to stay within
-    Gemini free tier token limits, then merges both responses.
-    Call 1: Portfolio quality + fund ratings + returns + costs
-    Call 2: Strategy + step-up + projections + actions + telegram
+    Primary: Gemini 2.0 Flash Lite (free, low quota usage)
+    Fallback: Groq Llama 3.3 70B (free, generous limits)
+    Splits prompt into 2 calls to stay within token limits.
     """
     import time
-
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        return None
-
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
 
     system_instruction = (
         "You are a brutally honest financial analyst. "
@@ -1017,52 +1011,127 @@ def call_gemini_api(prompt: str) -> Optional[dict]:
         "Your job is wealth maximisation, not comfort."
     )
 
-    def call_gemini(sub_prompt: str, attempt_label: str) -> Optional[str]:
-        max_retries = 3
+    def call_with_gemini(sub_prompt: str, label: str) -> Optional[str]:
+        api_key = os.environ.get("GEMINI_API_KEY")
+        if not api_key:
+            return None
+        url = (
+            "https://generativelanguage.googleapis.com/v1beta"
+            f"/models/gemini-2.0-flash-lite:generateContent?key={api_key}"
+        )
+        max_retries = 2
         for attempt in range(max_retries):
             try:
-                print(f"      Gemini {attempt_label} attempt {attempt+1}/{max_retries}...")
+                print(f"      [Gemini] {label} attempt {attempt+1}...")
                 resp = requests.post(url, json={
                     "contents": [{"parts": [{"text": sub_prompt}]}],
-                    "generationConfig": {"temperature": 0.2, "maxOutputTokens": 4096},
-                    "systemInstruction": {"parts": [{"text": system_instruction}]}
+                    "generationConfig": {
+                        "temperature": 0.2,
+                        "maxOutputTokens": 4096
+                    },
+                    "systemInstruction": {
+                        "parts": [{"text": system_instruction}]
+                    }
                 }, timeout=120)
 
                 if resp.status_code == 429:
-                    wait = 45 * (attempt + 1)
-                    print(f"      Rate limit — waiting {wait}s...")
+                    wait = 30 * (attempt + 1)
+                    print(f"      [Gemini] Rate limit — waiting {wait}s...")
                     time.sleep(wait)
                     continue
 
                 resp.raise_for_status()
                 content = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-
-                # Strip markdown fences
-                if "```" in content:
-                    for part in content.split("```"):
-                        if part.startswith("json"):
-                            content = part[4:].strip()
-                            break
-                        elif "{" in part:
-                            content = part.strip()
-                            break
-
-                # Extract JSON boundaries
-                start = content.find("{")
-                end = content.rfind("}") + 1
-                if start != -1 and end > start:
-                    return content[start:end]
+                return extract_json(content)
 
             except Exception as e:
-                print(f"      [WARN] {attempt_label} attempt {attempt+1} failed: {e}")
+                print(f"      [Gemini] {label} attempt {attempt+1} failed: {e}")
                 if attempt < max_retries - 1:
-                    time.sleep(30)
+                    time.sleep(20)
         return None
 
-    # ── Extract context block from full prompt (between first === and OUTPUT FORMAT)
+    def call_with_groq(sub_prompt: str, label: str) -> Optional[str]:
+        api_key = os.environ.get("GROQ_API_KEY")
+        if not api_key:
+            print("      [Groq] GROQ_API_KEY not set — skipping")
+            return None
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        max_retries = 2
+        for attempt in range(max_retries):
+            try:
+                print(f"      [Groq] {label} attempt {attempt+1}...")
+                resp = requests.post(url,
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "model": "llama-3.3-70b-versatile",
+                        "messages": [
+                            {"role": "system", "content": system_instruction},
+                            {"role": "user", "content": sub_prompt}
+                        ],
+                        "temperature": 0.2,
+                        "max_tokens": 4096,
+                    },
+                    timeout=120
+                )
+
+                if resp.status_code == 429:
+                    wait = 30 * (attempt + 1)
+                    print(f"      [Groq] Rate limit — waiting {wait}s...")
+                    time.sleep(wait)
+                    continue
+
+                resp.raise_for_status()
+                content = resp.json()["choices"][0]["message"]["content"].strip()
+                return extract_json(content)
+
+            except Exception as e:
+                print(f"      [Groq] {label} attempt {attempt+1} failed: {e}")
+                if attempt < max_retries - 1:
+                    time.sleep(20)
+        return None
+
+    def extract_json(content: str) -> Optional[str]:
+        """Strips markdown fences and extracts clean JSON string."""
+        if "```" in content:
+            for part in content.split("```"):
+                p = part.strip()
+                if p.startswith("json"):
+                    content = p[4:].strip()
+                    break
+                elif p.startswith("{"):
+                    content = p
+                    break
+        start = content.find("{")
+        end = content.rfind("}") + 1
+        if start != -1 and end > start:
+            return content[start:end]
+        return None
+
+    def call_ai(sub_prompt: str, label: str) -> Optional[str]:
+        """Tries Gemini first, falls back to Groq automatically."""
+        result = call_with_gemini(sub_prompt, label)
+        if result:
+            print(f"      [OK] {label} succeeded via Gemini")
+            return result
+        print(f"      [FALLBACK] Gemini failed for {label} — trying Groq...")
+        result = call_with_groq(sub_prompt, label)
+        if result:
+            print(f"      [OK] {label} succeeded via Groq")
+            return result
+        print(f"      [ERROR] Both Gemini and Groq failed for {label}")
+        return None
+
+    # ── Context block from full prompt
     context_start = prompt.find("INVESTOR PROFILE")
     context_end = prompt.find("OUTPUT FORMAT")
-    context_block = prompt[context_start:context_end].strip() if context_start != -1 else prompt[:3000]
+    context_block = (
+        prompt[context_start:context_end].strip()
+        if context_start != -1
+        else prompt[:4000]
+    )
 
     today = datetime.date.today().isoformat()
 
@@ -1072,7 +1141,7 @@ You are a brutally honest financial analyst. Analyse this investor's mutual fund
 
 {context_block[:4000]}
 
-Return ONLY this JSON structure — no prose, no markdown:
+Return ONLY this JSON — no prose, no markdown fences:
 
 {{
   "report_date": "{today}",
@@ -1126,7 +1195,7 @@ Return ONLY this JSON structure — no prose, no markdown:
 }}
 """
 
-    # ── CALL 2: Strategy + projections + actions + telegram summary
+    # ── CALL 2: Strategy + projections + actions + telegram
     prompt_2 = f"""
 You are a brutally honest financial analyst for this investor:
 - Age 34, Bangalore, Technical Manager EV Charging + Thermal Systems
@@ -1137,9 +1206,10 @@ You are a brutally honest financial analyst for this investor:
 - Planned car purchase in 18 months (estimated EMI Rs 17,000)
 - LTCG booked this year: Rs 0 (Rs 1.25L headroom available)
 - Market: Nifty P/E 22.4, RBI neutral, EV sector bullish
-- Home loan rate 8.5% vs equity post-tax return ~10.5%
+- Home loan rate 8.5% vs equity post-tax return 10.5%
+- Today: {today}
 
-Today is {today}. Return ONLY this JSON — no prose, no markdown:
+Return ONLY this JSON — no prose, no markdown fences:
 
 {{
   "projection": {{
@@ -1150,7 +1220,7 @@ Today is {today}. Return ONLY this JSON — no prose, no markdown:
     "sip_needed_for_1cr_inr": <float>,
     "sip_needed_for_2cr_inr": <float>,
     "sip_needed_for_5cr_inr": <float>,
-    "wealth_gap_assessment": "<honest 2 sentence gap assessment>"
+    "wealth_gap_assessment": "<honest 2 sentence assessment>"
   }},
   "stepup_guidance": {{
     "phase": <1 or 2 or 3>,
@@ -1171,51 +1241,47 @@ Today is {today}. Return ONLY this JSON — no prose, no markdown:
   }},
   "career_resilience_flag": {{
     "signal": "POSITIVE or NEUTRAL or NEGATIVE",
-    "ev_sector_status": "<current EV outlook>",
+    "ev_sector_status": "<current EV outlook 1 sentence>",
     "income_risk_level": "<low/medium/high>",
-    "implication_for_sip": "<how this affects investment aggression>"
+    "implication_for_sip": "<1 sentence>"
   }},
   "action_items": [
     {{
       "priority": "URGENT or ADVISORY or FYI",
-      "action": "<specific action with deadline>",
+      "action": "<specific action>",
       "impact_inr": <float or null>,
       "deadline": "<by when>"
     }}
   ],
-  "no_action_flag": <true or false>,
-  "no_action_reason": "<only if no action needed>",
-  "telegram_summary": "<100 word max plain text Telegram message. Start with score. Fund verdicts. Top 2 actions. 15yr corpus. No emojis. Brutally direct.>"
+  "no_action_flag": false,
+  "no_action_reason": "",
+  "telegram_summary": "<100 word max plain text summary. Score first. Fund verdicts. Top 2 actions. 15yr corpus. No emojis. Brutally direct.>"
 }}
 """
 
-    # ── Execute both calls with 15s gap to avoid rate limiting
-    print("      Running split analysis — Call 1 (portfolio)...")
-    result1_str = call_gemini(prompt_1, "Call-1")
+    # ── Run both calls with 15s gap
+    print("      Running Call 1 — portfolio analysis...")
+    result1_str = call_ai(prompt_1, "Call-1")
     if not result1_str:
-        print("[ERROR] Call 1 failed")
         return None
 
     print("      Waiting 15s before Call 2...")
     time.sleep(15)
 
-    print("      Running split analysis — Call 2 (strategy)...")
-    result2_str = call_gemini(prompt_2, "Call-2")
+    print("      Running Call 2 — strategy and projections...")
+    result2_str = call_ai(prompt_2, "Call-2")
     if not result2_str:
-        print("[ERROR] Call 2 failed")
         return None
 
-    # ── Merge both JSON responses
+    # ── Merge both responses
     try:
-        result1 = json.loads(result1_str)
-        result2 = json.loads(result2_str)
-        merged = {**result1, **result2}
-        print("      [OK] Both calls successful — reports merged")
+        merged = {**json.loads(result1_str), **json.loads(result2_str)}
+        print("      [OK] Both calls merged successfully")
         return merged
     except json.JSONDecodeError as e:
-        print(f"[ERROR] JSON merge failed: {e}")
-        print(f"  Call 1 response: {result1_str[:200]}")
-        print(f"  Call 2 response: {result2_str[:200]}")
+        print(f"[ERROR] Merge failed: {e}")
+        print(f"  Call 1: {result1_str[:300]}")
+        print(f"  Call 2: {result2_str[:300]}")
         return None
 
 # ═══════════════════════════════════════════════════════════════════════════════
