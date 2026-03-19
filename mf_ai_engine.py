@@ -995,36 +995,83 @@ def call_claude_api(prompt: str) -> Optional[dict]:
         print(f"[ERROR] Claude API call failed: {e}")
         return None
 
-
 def call_gemini_api(prompt: str) -> Optional[dict]:
     """
-    Fallback: Calls Gemini 1.5 Pro (free tier) if Claude fails.
-    Requires GEMINI_API_KEY env variable.
+    Calls Gemini 2.0 Flash with retry logic for rate limits.
+    Free tier: 15 RPM, 1M TPM. Our prompt is large so we retry with backoff.
     """
+    import time
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         return None
-    try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
-        response = requests.post(
-            url,
-            json={
-                "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {"temperature": 0.2, "maxOutputTokens": 8192},
-            },
-            timeout=60,
-        )
-        response.raise_for_status()
-        content = response.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-        if content.startswith("```"):
-            content = content.split("```")[1]
-            if content.startswith("json"):
-                content = content[4:]
-        return json.loads(content)
-    except Exception as e:
-        print(f"[ERROR] Gemini API call failed: {e}")
-        return None
 
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
+
+    payload = {
+        "contents": [{
+            "parts": [{"text": prompt}]
+        }],
+        "generationConfig": {
+            "temperature": 0.2,
+            "maxOutputTokens": 8192,
+        },
+        "systemInstruction": {
+            "parts": [{"text": (
+                "You are a brutally honest financial analyst. "
+                "Return ONLY valid JSON. No markdown fences, no prose. "
+                "Every monetary figure in Indian Rupees. "
+                "Your job is wealth maximisation, not comfort."
+            )}]
+        }
+    }
+
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            print(f"      Gemini attempt {attempt + 1}/{max_retries}...")
+            resp = requests.post(url, json=payload, timeout=120)
+
+            if resp.status_code == 429:
+                wait = 30 * (attempt + 1)  # 30s, 60s, 90s
+                print(f"      Rate limit hit — waiting {wait}s before retry...")
+                time.sleep(wait)
+                continue
+
+            resp.raise_for_status()
+            content = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+
+            # Strip markdown fences if present
+            if "```" in content:
+                parts = content.split("```")
+                for part in parts:
+                    if part.startswith("json"):
+                        content = part[4:].strip()
+                        break
+                    elif "{" in part:
+                        content = part.strip()
+                        break
+
+            # Find JSON object boundaries
+            start = content.find("{")
+            end = content.rfind("}") + 1
+            if start != -1 and end > start:
+                content = content[start:end]
+
+            return json.loads(content)
+
+        except json.JSONDecodeError as e:
+            print(f"      [WARN] JSON parse failed attempt {attempt+1}: {e}")
+            if attempt < max_retries - 1:
+                time.sleep(20)
+            continue
+        except Exception as e:
+            print(f"      [ERROR] Gemini attempt {attempt+1} failed: {e}")
+            if attempt < max_retries - 1:
+                time.sleep(20)
+            continue
+
+    print("[ERROR] All Gemini retries exhausted")
+    return None
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  SECTION 12 — TELEGRAM MESSAGE FORMATTER
