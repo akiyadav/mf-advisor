@@ -1597,11 +1597,8 @@ def publish_to_github_pages(report: dict, portfolio: list, market: dict) -> str:
         "generated_at":       str(datetime.datetime.now()),
     }, indent=2)
 
-   injection = f"""
-<script>
-window.REPORT_DATA = {report_json};
-</script>
-"""
+    injection = f"<script>\nwindow.REPORT_DATA = {report_json};\n</script>\n"
+    
     dashboard_html = template.replace("</body>", injection + "\n</body>")
 
     index_path = os.path.join(docs_dir, "index.html")
