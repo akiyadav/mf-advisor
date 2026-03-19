@@ -1005,12 +1005,12 @@ def call_gemini_api(prompt: str) -> Optional[dict]:
     if not api_key:
         return None
     try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key={api_key}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
         response = requests.post(
             url,
             json={
                 "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {"temperature": 0.2, "maxOutputTokens": 4096},
+                "generationConfig": {"temperature": 0.2, "maxOutputTokens": 8192},
             },
             timeout=60,
         )
