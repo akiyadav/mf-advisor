@@ -1360,12 +1360,9 @@ def main():
         personal_risk, step_up, loan_vs_sip, overlap, exit_costs
     )
 
-    report = call_claude_api(prompt)
+    report = call_gemini_api(prompt)
     if not report:
-        print("      Claude failed — trying Gemini fallback...")
-        report = call_gemini_api(prompt)
-    if not report:
-        print("[ERROR] Both AI calls failed — aborting")
+        print("[ERROR] AI calls failed — aborting")
         return
 
     print(f"\n      Master score: {report.get('master_score')}/10")
