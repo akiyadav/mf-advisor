@@ -1,0 +1,63 @@
+name: MF AI Advisor — Monthly Run
+
+on:
+  schedule:
+    # Runs at 8:00 AM IST on last day of every month
+    # UTC 2:30 AM = IST 8:00 AM
+    # Last day logic: runs on 28th, 29th, 30th, 31st — script checks internally
+    - cron: '30 2 28-31 * *'
+
+  # Manual trigger — run anytime from GitHub Actions UI
+  workflow_dispatch:
+
+jobs:
+  run-mf-advisor:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install requests anthropic
+
+      - name: Check if today is last day of month
+        id: check_date
+        run: |
+          python3 -c "
+          import datetime
+          today = datetime.date.today()
+          last_day = (today.replace(day=1) + datetime.timedelta(days=32)).replace(day=1) - datetime.timedelta(days=1)
+          is_last = today == last_day
+          print(f'Today: {today} | Last day: {last_day} | Is last day: {is_last}')
+          import os
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f'is_last_day={str(is_last).lower()}\n')
+          "
+
+      - name: Run MF AI Engine
+        if: steps.check_date.outputs.is_last_day == 'true' || github.event_name == 'workflow_dispatch'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          KITE_API_KEY: ${{ secrets.KITE_API_KEY }}
+          KITE_ACCESS_TOKEN: ${{ secrets.KITE_ACCESS_TOKEN }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+        run: |
+          python3 mf_ai_engine.py
+
+      - name: Upload report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mf-report-${{ github.run_id }}
+          path: reports/
+          retention-days: 90
