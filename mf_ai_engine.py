@@ -1589,7 +1589,7 @@ def publish_to_github_pages(report: dict, portfolio: list, market: dict) -> str:
 
     with open(template_path, encoding="utf-8") as f:
         template = f.read()
-
+        
     report_json = json.dumps({
         "report":             report,
         "portfolio_snapshot": portfolio,
