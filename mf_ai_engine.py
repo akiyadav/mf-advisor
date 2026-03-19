@@ -1540,30 +1540,96 @@ def fetch_zerodha_portfolio() -> Optional[list]:
         resp.raise_for_status()
         kite_holdings = resp.json().get("data", [])
 
+        # Fetch SIP order history to get actual purchase dates
+        sip_dates = {}
+        try:
+            sip_resp = requests.get(
+                "https://api.kite.trade/mf/sips",
+                headers=headers,
+                timeout=15,
+            )
+            if sip_resp.status_code == 200:
+                for sip in sip_resp.json().get("data", []):
+                    isin = sip.get("isin", "")
+                    created = sip.get("created", "")
+                    if isin and created:
+                        # Keep earliest date per fund
+                        if isin not in sip_dates or created < sip_dates[isin]:
+                            sip_dates[isin] = created[:10]  # YYYY-MM-DD
+        except Exception as e:
+            print(f"[WARN] SIP date fetch failed: {e}")
+
+        # Fetch order history as fallback for purchase dates
+        order_dates = {}
+        try:
+            orders_resp = requests.get(
+                "https://api.kite.trade/mf/orders",
+                headers=headers,
+                timeout=15,
+            )
+            if orders_resp.status_code == 200:
+                for order in orders_resp.json().get("data", []):
+                    isin = order.get("isin", "")
+                    placed = order.get("placed_by", "")
+                    order_date = order.get("order_timestamp", "")
+                    if isin and order_date:
+                        date_str = order_date[:10]
+                        if isin not in order_dates or date_str < order_dates[isin]:
+                            order_dates[isin] = date_str
+        except Exception as e:
+            print(f"[WARN] Order date fetch failed: {e}")
+
+        # Safe fallback date — 2 years ago
+        # This is conservative: assumes units are held long enough
+        # that most exit load windows (1yr) have passed
+        fallback_date = str(datetime.date.today() - datetime.timedelta(days=730))
+
         portfolio = []
-        today_str = str(datetime.date.today())
         for h in kite_holdings:
             qty   = float(h.get("quantity", 0))
             price = float(h.get("last_price", 0))
+            isin  = h.get("isin", "")
+
+            # Best estimate of actual purchase/SIP start date
+            # Priority: SIP creation date > first order date > fallback
+            best_date = (
+                sip_dates.get(isin)
+                or order_dates.get(isin)
+                or fallback_date
+            )
+
+            # Determine plan type from fund name
+            fund_name = h.get("fund", "")
+            plan = "regular" if "REGULAR" in fund_name.upper() else "direct"
+
+            # Estimate expense ratio from plan type and category
+            # Will be enriched by AI analysis
+            expense_ratio = 0.5 if plan == "direct" else 1.5
+
             portfolio.append({
-                "fund_name":         h.get("fund", ""),
-                "isin":              h.get("isin", ""),
-                "amfi_code":         h.get("folio_no", ""),
-                "category":          "Unknown",
-                "amc":               h.get("fund", "").split(" ")[0],
-                "plan":              "direct",
-                "units":             qty,
-                "avg_nav":           float(h.get("average_price", 0)),
-                "current_nav":       price,
-                "invested_inr":      float(h.get("amount", 0)),
-                "current_value_inr": price * qty,
-                "monthly_sip_inr":   0,
-                "sip_start_date":    today_str,
-                "oldest_unit_date":  today_str,
-                "expense_ratio_pct": 0,
-                "exit_load_pct":     1.0,
+                "fund_name":             fund_name,
+                "isin":                  isin,
+                "amfi_code":             h.get("folio_no", ""),
+                "category":              "Unknown",
+                "amc":                   fund_name.split(" ")[0],
+                "plan":                  plan,
+                "units":                 qty,
+                "avg_nav":               float(h.get("average_price", 0)),
+                "current_nav":           price,
+                "invested_inr":          float(h.get("amount", 0)),
+                "current_value_inr":     price * qty,
+                "monthly_sip_inr":       0,
+                "sip_start_date":        best_date,
+                "oldest_unit_date":      best_date,
+                "expense_ratio_pct":     expense_ratio,
+                "exit_load_pct":         1.0,
                 "exit_load_window_days": 365,
             })
+        print(f"[OK] Fetched {len(portfolio)} holdings | "
+              f"{len(sip_dates)} SIP dates | "
+              f"{len(order_dates)} order dates resolved")
+              
+        
         print(f"[OK] Fetched {len(portfolio)} holdings from Zerodha")
         return portfolio if portfolio else None
 
