@@ -1597,14 +1597,9 @@ def publish_to_github_pages(report: dict, portfolio: list, market: dict) -> str:
         "generated_at":       str(datetime.datetime.now()),
     }, indent=2)
 
-    injection = f"""
+   injection = f"""
 <script>
 window.REPORT_DATA = {report_json};
-window.addEventListener('DOMContentLoaded', function() {{
-    if (typeof injectReportData === 'function' && window.REPORT_DATA) {{
-        injectReportData(window.REPORT_DATA.report);
-    }}
-}});
 </script>
 """
     dashboard_html = template.replace("</body>", injection + "\n</body>")
