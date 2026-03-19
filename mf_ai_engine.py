@@ -23,6 +23,10 @@ import subprocess
 import shutil
 from typing import Optional
 
+global _portfolio_ref
+# Global portfolio reference for sub-prompt builder
+_portfolio_ref: list = []
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  SECTION 1 — INVESTOR PROFILE
@@ -1141,7 +1145,9 @@ def _merge_sub_results(r1_str: str, r2_str: str, source: str) -> Optional[dict]:
         print(f"  Call 2 snippet: {r2_str[:200]}")
         return None
 
-
+    # Access portfolio reference set by main()
+    global _portfolio_ref
+    
 # ── PRIMARY: OpenAI GPT-4o-mini ──────────────────────────────────────────────
 
 def call_openai_api(prompt: str) -> Optional[dict]:
@@ -1210,7 +1216,7 @@ def call_groq_api(prompt: str) -> Optional[dict]:
         print("      [Groq] GROQ_API_KEY not set — skipping")
         return None
 
-    prompt_1, prompt_2 = build_sub_prompts(prompt)
+    prompt_1, prompt_2 = build_sub_prompts(prompt, _portfolio_ref)
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -1265,7 +1271,7 @@ def call_gemini_api(prompt: str) -> Optional[dict]:
         print("      [Gemini] GEMINI_API_KEY not set — skipping")
         return None
 
-    prompt_1, prompt_2 = build_sub_prompts(prompt)
+    prompt_1, prompt_2 = build_sub_prompts(prompt, _portfolio_ref)
     url = (
         "https://generativelanguage.googleapis.com/v1beta"
         f"/models/gemini-2.0-flash-lite:generateContent?key={api_key}"
@@ -1840,10 +1846,13 @@ def main():
 
     # Step 3 — Exit costs
     print("[3/8] Calculating exit costs...")
-    exit_costs = []
+  exit_costs = []
     for fund in portfolio:
         cost = calculate_exit_cost(fund, INVESTOR_PROFILE)
         exit_costs.append(cost)
+        # Attach exit cost directly to fund dict for sub-prompt builder
+        fund["total_exit_cost_inr"] = cost["total_exit_cost_inr"]
+        
         print(f"      {fund['fund_name'][:35]}: Rs {cost['total_exit_cost_inr']:,.0f} ({cost['total_exit_cost_pct']}%)")
 
     # Step 4 — Personal risk
@@ -1868,6 +1877,9 @@ def main():
     overlap = calculate_portfolio_overlap(portfolio)
     print(f"      Overlap: {overlap['overall_overlap_pct']}% ({overlap['verdict']})")
 
+    # Make portfolio available to AI callers for sub-prompt building
+    global _portfolio_ref
+        _portfolio_ref = portfolio
     # Step 8 — AI synthesis: OpenAI → Groq → Gemini
     print("[8/8] Running AI analysis...")
     prompt = build_master_prompt(
