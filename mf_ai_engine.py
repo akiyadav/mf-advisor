@@ -1292,146 +1292,344 @@ Return ONLY this JSON — no prose, no markdown fences:
 
 def format_telegram_message(report: dict, investor: dict, dashboard_url: str = None) -> str:
     """
-    Formats the AI analysis report as a clean Telegram message.
-    Structure: Score → Key Findings → Actions → Projection → Link
+    Beautiful, minimal, mobile-optimised Telegram message.
+    Uses Unicode box-drawing and symbols for visual structure.
+    Readable in 60 seconds. Every number in Rs. No fluff.
+    Telegram 4096 char limit respected.
     """
-    today = datetime.date.today().strftime("%b %Y")
-    score = report.get("master_score", "N/A")
-    score_reason = report.get("master_score_reasoning", "")
+    today     = datetime.date.today().strftime("%d %b %Y")
+    score     = report.get("master_score", 0)
+    no_action = report.get("no_action_flag", False)
 
-    # Score indicator
-    if isinstance(score, (int, float)):
-        if score >= 8:
-            indicator = "STRONG"
-        elif score >= 6:
-            indicator = "ADEQUATE"
-        elif score >= 4:
-            indicator = "WEAK"
-        else:
-            indicator = "CRITICAL"
-    else:
-        indicator = "N/A"
+    # Score visual bar (10 blocks)
+    def score_bar(s):
+        filled  = int(round(s))
+        empty   = 10 - filled
+        bar     = "█" * filled + "░" * empty
+        return bar
 
-    lines = [
-        f"MF ADVISOR REPORT — {today}",
-        f"{'─' * 32}",
-        f"PORTFOLIO SCORE: {score}/10 ({indicator})",
-        f"{score_reason}",
+    def score_grade(s):
+        if s >= 8: return "STRONG"
+        if s >= 6: return "ADEQUATE"
+        if s >= 4: return "WEAK"
+        return "CRITICAL"
+
+    def fund_icon(verdict):
+        return {"HOLD": "✅", "WATCH": "⚠️", "SWITCH": "🔄", "EXIT": "❌"}.get(verdict, "•")
+
+    def priority_icon(p):
+        return {"URGENT": "🔴", "ADVISORY": "🟡", "FYI": "🟢"}.get(p, "•")
+
+    def wrap(text, width=46, indent="    "):
+        """Word-wrap text for mobile screen width."""
+        words  = str(text).split()
+        lines  = []
+        line   = ""
+        for w in words:
+            if len(line) + len(w) + 1 <= width:
+                line = (line + " " + w).strip()
+            else:
+                if line: lines.append(indent + line)
+                line = w
+        if line: lines.append(indent + line)
+        return "\n".join(lines)
+
+    L = []  # lines
+
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # HEADER
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    L += [
+        "━━━━━━━━━━━━━━━━━━━━━━━━━",
+        "  💼 AFundMentor Pro",
+        f"  {today}  |  Monthly Report",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━",
         "",
     ]
 
-    # No action case
-    if report.get("no_action_flag"):
-        lines += [
-            "VERDICT: NO ACTION REQUIRED THIS MONTH",
-            report.get("no_action_reason", ""),
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # MASTER SCORE
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    L += [
+        "📊  PORTFOLIO SCORE",
+        f"    {score}/10  {score_bar(score)}",
+        f"    {score_grade(score)}",
+        "",
+        f"    {report.get('master_score_reasoning', '')[:120]}",
+        "",
+    ]
+
+    if no_action:
+        L += [
+            "─────────────────────────",
+            "✅  NO ACTION NEEDED",
+            "",
+            f"    {report.get('no_action_reason', '')[:180]}",
             "",
         ]
     else:
-        # Fund verdicts
-        lines.append("FUND VERDICTS:")
-        for f in report.get("fund_ratings", []):
-            verdict_sym = {"HOLD": "ok", "WATCH": "!!", "SWITCH": "!!", "EXIT": "XX"}.get(f["verdict"], "--")
-            lines.append(f"  [{verdict_sym}] {f['fund_name'][:30]} — {f['score']}/10 — {f['verdict']}")
-        lines.append("")
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        # PILLAR SCORES
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        p = report.get("pillar_scores", {})
+        if p:
+            L += [
+                "─────────────────────────",
+                "📐  PILLARS",
+                f"    Quality      {p.get('portfolio_quality','-')}/10  {score_bar(p.get('portfolio_quality',0))}",
+                f"    Cost         {p.get('cost_intelligence','-')}/10  {score_bar(p.get('cost_intelligence',0))}",
+                f"    Structure    {p.get('portfolio_construction','-')}/10  {score_bar(p.get('portfolio_construction',0))}",
+                f"    Risk         {p.get('personal_risk','-')}/10  {score_bar(p.get('personal_risk',0))}",
+                f"    Strategy     {p.get('behaviour_strategy','-')}/10  {score_bar(p.get('behaviour_strategy',0))}",
+                "",
+            ]
 
-        # Brutal honesty (top 3)
-        lines.append("BRUTAL FINDINGS:")
-        for i, finding in enumerate(report.get("brutal_honesty_block", [])[:3], 1):
-            lines.append(f"  {i}. {finding}")
-        lines.append("")
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        # FUND VERDICTS
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        funds = report.get("fund_ratings", [])
+        if funds:
+            L += [
+                "─────────────────────────",
+                "🏦  FUNDS",
+            ]
+            for f in funds:
+                icon    = fund_icon(f.get("verdict", ""))
+                name    = f.get("fund_name", "")[:30]
+                sc      = f.get("score", "-")
+                verdict = f.get("verdict", "")
+                cagr3   = f.get("3yr_cagr_pct")
+                exp     = f.get("expense_ratio_verdict", "")
+                finding = f.get("key_finding", "")
+                L += [
+                    f"",
+                    f"  {icon}  {name}",
+                    f"      Score  : {sc}/10  |  {verdict}",
+                ]
+                if cagr3:
+                    L.append(f"      3yr    : {cagr3}%  |  Expense: {exp}")
+                if finding:
+                    L.append(wrap(finding, width=44, indent="      "))
+            L.append("")
 
-        # Actions
-        lines.append("ACTIONS THIS MONTH:")
-        for item in report.get("action_items", []):
-            tag = item.get("priority", "FYI")
-            lines.append(f"  [{tag}] {item['action']}")
-            if item.get("impact_inr"):
-                lines.append(f"         Impact: ~Rs {item['impact_inr']:,.0f}")
-        lines.append("")
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        # RETURNS
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        ret = report.get("returns_analysis", {})
+        if ret:
+            inv  = ret.get("total_invested_inr", 0)
+            curr = ret.get("current_value_inr", 0)
+            gain = ret.get("absolute_gain_inr", 0)
+            L += [
+                "─────────────────────────",
+                "📈  YOUR RETURNS",
+                f"    XIRR          : {ret.get('portfolio_xirr_pct','-')}%",
+                f"    Real (post-CPI): {ret.get('real_return_post_inflation_pct','-')}%",
+                f"    Invested      : ₹{inv:,.0f}",
+                f"    Current value : ₹{curr:,.0f}",
+                f"    Total gain    : ₹{gain:,.0f}",
+                f"    vs Nifty 50   : {ret.get('vs_nifty50_pct','-')}%",
+                "",
+            ]
 
-    # Projection snapshot
-    proj = report.get("projection", {})
-    if proj:
-        flat = proj.get("corpus_at_15yr_flat_sip_real_inr", 0)
-        stepup = proj.get("corpus_at_15yr_stepup_real_inr", 0)
-        lines += [
-            "15-YEAR PROJECTION (inflation-adjusted):",
-            f"  Flat SIP Rs 20k  : Rs {flat:,.0f}",
-            f"  With step-up     : Rs {stepup:,.0f}",
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        # BRUTAL FINDINGS
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        brutal = report.get("brutal_honesty_block", [])
+        if brutal:
+            L += [
+                "─────────────────────────",
+                "🔍  BRUTAL FINDINGS",
+                "",
+            ]
+            for i, finding in enumerate(brutal[:4], 1):
+                L.append(f"  {i}.")
+                L.append(wrap(finding, width=44, indent="     "))
+                L.append("")
+
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        # ACTIONS
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        actions = report.get("action_items", [])
+        if actions:
+            L += [
+                "─────────────────────────",
+                "⚡  ACTIONS",
+                "",
+            ]
+            for item in actions:
+                icon     = priority_icon(item.get("priority", "FYI"))
+                priority = item.get("priority", "FYI")
+                action   = item.get("action", "")
+                impact   = item.get("impact_inr")
+                deadline = item.get("deadline", "")
+                L.append(f"  {icon}  [{priority}]")
+                L.append(wrap(action, width=44, indent="     "))
+                if impact:
+                    L.append(f"     Impact  : ₹{impact:,.0f}")
+                if deadline:
+                    L.append(f"     By      : {deadline}")
+                L.append("")
+
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        # PROJECTION
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        proj = report.get("projection", {})
+        if proj:
+            flat   = proj.get("corpus_at_15yr_flat_sip_real_inr", 0)
+            stepup = proj.get("corpus_at_15yr_stepup_real_inr", 0)
+            gap    = proj.get("wealth_gap_assessment", "")
+            L += [
+                "─────────────────────────",
+                "🎯  15-YEAR PROJECTION",
+                "    (inflation-adjusted)",
+                "",
+                f"    Flat ₹20k SIP : ₹{flat:,.0f}",
+                f"    With step-up  : ₹{stepup:,.0f}",
+                "",
+                wrap(gap, width=44, indent="    "),
+                "",
+            ]
+
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        # STEP-UP
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        su = report.get("stepup_guidance", {})
+        if su and su.get("recommended_sip_increase_inr", 0) > 0:
+            L += [
+                "─────────────────────────",
+                "📅  APRIL STEP-UP",
+                f"    Phase   : {su.get('phase_label','')}",
+                f"    SIP +   : ₹{su.get('recommended_sip_increase_inr',0):,.0f}/mo",
+                f"    Buffer +: ₹{su.get('buffer_addition_inr',0):,.0f}/mo",
+                "",
+                wrap(su.get("april_action", ""), width=44, indent="    "),
+                "",
+            ]
+
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        # LOAN vs SIP
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        lsip = report.get("loan_vs_sip_verdict", {})
+        if lsip:
+            L += [
+                "─────────────────────────",
+                f"🏠  LOAN vs SIP : {lsip.get('verdict','')}",
+                "",
+                wrap(lsip.get("reasoning", ""), width=44, indent="    "),
+                "",
+            ]
+
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        # TAX HARVEST
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        tax = report.get("tax_harvest_alert", {})
+        if tax.get("opportunity_exists"):
+            headroom = tax.get("ltcg_headroom_inr", 0)
+            L += [
+                "─────────────────────────",
+                "💰  TAX HARVEST ALERT",
+                f"    Book ₹{headroom:,.0f} LTCG — zero tax",
+                "",
+                wrap(tax.get("recommended_action", ""), width=44, indent="    "),
+                "",
+            ]
+
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        # CAREER SIGNAL
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        career = report.get("career_resilience_flag", {})
+        if career:
+            signal = career.get("signal", "")
+            sig_icon = {"POSITIVE": "🟢", "NEUTRAL": "🟡", "NEGATIVE": "🔴"}.get(signal, "•")
+            L += [
+                "─────────────────────────",
+                f"{sig_icon}  CAREER : {signal}",
+                "",
+                wrap(career.get("ev_sector_status", ""), width=44, indent="    "),
+                f"    Income risk : {career.get('income_risk_level','')}",
+                "",
+            ]
+
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        # COST DRAIN
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        cost = report.get("cost_summary", {})
+        if cost:
+            drag     = cost.get("total_annual_expense_drag_inr", 0)
+            reg_loss = cost.get("regular_plan_annual_loss_inr", 0)
+            comp     = cost.get("15yr_compounding_loss_from_regular_plan_inr", 0)
+            L += [
+                "─────────────────────────",
+                "💸  COST DRAIN",
+                f"    Annual drag      : ₹{drag:,.0f}",
+                f"    Regular plan loss: ₹{reg_loss:,.0f}/yr",
+                f"    15yr impact      : ₹{comp:,.0f}",
+                "",
+            ]
+
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # FOOTER + DASHBOARD LINK
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    next_month = (
+        datetime.date.today().replace(day=1) +
+        datetime.timedelta(days=32)
+    ).replace(day=1) - datetime.timedelta(days=1)
+
+    L += ["━━━━━━━━━━━━━━━━━━━━━━━━━"]
+
+    if dashboard_url:
+        L += [
+            "📱  Full Dashboard",
+            f"    {dashboard_url}",
             "",
         ]
 
-    # SIP step-up
-    su = report.get("stepup_guidance", {})
-    if su and su.get("recommended_sip_increase_inr", 0) > 0:
-        lines.append(f"APRIL STEP-UP: Increase SIP by Rs {su['recommended_sip_increase_inr']:,}/month")
-        lines.append(f"  {su.get('april_action', '')}")
-        lines.append("")
-
-    # Career flag
-    career = report.get("career_resilience_flag", {})
-    if career:
-        lines.append(f"CAREER SIGNAL: {career.get('signal', 'N/A')} — {career.get('ev_sector_status', '')}")
-        lines.append("")
-
-    # Tax harvest
-    tax = report.get("tax_harvest_alert", {})
-    if tax.get("opportunity_exists"):
-        lines.append(f"TAX HARVEST ALERT: Book Rs {tax.get('ltcg_headroom_inr',0):,.0f} LTCG tax-free this month")
-        lines.append(f"  {tax.get('recommended_action', '')}")
-        lines.append("")
-
-    # Dashboard link
-    if dashboard_url:
-        lines += [
-            f"{'─' * 32}",
-            f"Full report: {dashboard_url}",
-        ]
-
-    lines += [
-        f"{'─' * 32}",
-        f"Next report: {(datetime.date.today().replace(day=1) + datetime.timedelta(days=32)).replace(day=1) - datetime.timedelta(days=1)}",
-        "Engine: MF AI Advisor v1.0",
+    L += [
+        f"    Next report : {next_month.strftime('%d %b %Y')}",
+        "    AFundMentor Pro v1.0",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━",
     ]
 
-    return "\n".join(lines)
+    # Telegram 4096 char safety trim
+    msg = "\n".join(L)
+    if len(msg) > 4000:
+        msg = msg[:3950] + "\n\n    ... (see dashboard for full report)"
 
+    return msg
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  SECTION 13 — TELEGRAM SENDER
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def send_telegram_message(message: str) -> bool:
+def send_telegram_message(message: str, dashboard_path: str = None) -> bool:
     """
-    Sends message to your Telegram chat.
-    Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID as env variables.
-    Get bot token from @BotFather. Get chat ID from @userinfobot.
+    Sends the formatted Telegram message.
+    No file attachment — dashboard is hosted on GitHub Pages instead.
     """
     bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+    chat_id   = os.environ.get("TELEGRAM_CHAT_ID")
 
     if not bot_token or not chat_id:
-        print("[WARN] Telegram credentials not set — printing to console instead")
+        print("[WARN] Telegram credentials not set — printing to console")
         print("\n" + "═" * 50)
         print(message)
         print("═" * 50 + "\n")
         return False
 
     try:
-        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-        response = requests.post(url, json={
-            "chat_id": chat_id,
-            "text": message,
+        url  = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+        resp = requests.post(url, json={
+            "chat_id":    chat_id,
+            "text":       message,
             "parse_mode": "HTML",
         }, timeout=15)
-        response.raise_for_status()
-        print("[OK] Telegram message sent successfully")
+        resp.raise_for_status()
+        print("[OK] Telegram message sent")
         return True
     except Exception as e:
         print(f"[ERROR] Telegram send failed: {e}")
         return False
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  SECTION 14 — REPORT SAVER
@@ -1558,6 +1756,130 @@ def fetch_zerodha_portfolio() -> Optional[list]:
         print(f"[WARN] Zerodha fetch failed: {e} — falling back to dummy data")
         return None
 
+#section 15.1 publish
+
+def publish_to_github_pages(report: dict, portfolio: list, market: dict) -> str:
+    """
+    Generates the HTML dashboard and commits it to docs/ folder.
+    GitHub Pages serves it at https://akiyadav.github.io/mf-advisor/
+    Returns the public URL.
+    """
+    import subprocess
+    import shutil
+
+    today    = datetime.date.today()
+    date_str = today.strftime("%Y_%m")
+    docs_dir = "docs"
+    os.makedirs(docs_dir, exist_ok=True)
+
+    # ── Build self-contained dashboard HTML with injected report data
+    report_json = json.dumps({
+        "report":             report,
+        "portfolio_snapshot": portfolio,
+        "market_snapshot":    market,
+        "generated_at":       str(datetime.datetime.now()),
+    }, indent=2)
+
+    # Read dashboard template
+    template_path = "dashboard.html"
+    if not os.path.exists(template_path):
+        print("[WARN] dashboard.html not found — skipping Pages publish")
+        return ""
+
+    with open(template_path) as f:
+        template = f.read()
+
+    # Inject report data as JS variable
+    injection = f"""
+<script>
+window.REPORT_DATA = {report_json};
+window.addEventListener('DOMContentLoaded', function() {{
+    if (typeof injectReportData === 'function' && window.REPORT_DATA) {{
+        injectReportData(window.REPORT_DATA.report);
+    }}
+}});
+</script>
+"""
+    dashboard_html = template.replace("</body>", injection + "\n</body>")
+
+    # Save as index.html (latest report)
+    index_path = os.path.join(docs_dir, "index.html")
+    with open(index_path, "w", encoding="utf-8") as f:
+        f.write(dashboard_html)
+
+    # Also save dated archive copy
+    archive_path = os.path.join(docs_dir, f"report_{date_str}.html")
+    shutil.copy(index_path, archive_path)
+
+    # Build archive index page
+    archives = sorted([
+        f for f in os.listdir(docs_dir)
+        if f.startswith("report_") and f.endswith(".html")
+    ], reverse=True)
+
+    archive_index = """<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>AFundMentor Pro — Reports</title>
+<style>
+body{font-family:monospace;background:#0b0b10;color:#dcdce8;
+     padding:40px;max-width:500px;margin:0 auto;}
+h1{color:#b8ff4e;margin-bottom:8px;font-size:24px;}
+p{color:#6b6b80;font-size:12px;margin-bottom:28px;}
+a{color:#4eb8ff;text-decoration:none;display:block;
+  padding:10px 0;border-bottom:1px solid rgba(255,255,255,.06);
+  font-size:13px;}
+a:hover{color:#fff;}
+.latest{color:#b8ff4e;}
+</style>
+</head>
+<body>
+<h1>AFundMentor Pro</h1>
+<p>Monthly MF Analysis Reports</p>
+""" + "\n".join([
+    f'<a href="{f}" class="{"latest" if i==0 else ""}">'
+    f'{"★ Latest — " if i==0 else ""}'
+    f'{f.replace("report_","").replace(".html","").replace("_"," ")}'
+    f'</a>'
+    for i, f in enumerate(archives)
+]) + """
+</body>
+</html>"""
+
+    with open(os.path.join(docs_dir, "archive.html"), "w") as f:
+        f.write(archive_index)
+
+    # ── Git commit and push docs/ to GitHub
+    github_username = os.environ.get("GITHUB_USERNAME", "akiyadav")
+    github_repo     = os.environ.get("GITHUB_REPO", "mf-advisor")
+    github_token    = os.environ.get("GITHUB_TOKEN", "")
+
+    try:
+        # Configure git (needed in GitHub Actions environment)
+        subprocess.run(["git", "config", "user.email", "mf-advisor@bot.com"],  check=True)
+        subprocess.run(["git", "config", "user.name",  "AFundMentor Bot"],     check=True)
+
+        # Set remote with token for push auth in Actions
+        if github_token:
+            remote_url = (
+                f"https://{github_token}@github.com"
+                f"/{github_username}/{github_repo}.git"
+            )
+            subprocess.run(["git", "remote", "set-url", "origin", remote_url], check=True)
+
+        subprocess.run(["git", "add", "docs/"],        check=True)
+        subprocess.run(["git", "commit", "-m",
+                        f"Auto: dashboard update {today}"],            check=True)
+        subprocess.run(["git", "push", "origin", "main"],              check=True)
+
+        url = f"https://{github_username}.github.io/{github_repo}/"
+        print(f"[OK] Dashboard published: {url}")
+        return url
+
+    except subprocess.CalledProcessError as e:
+        print(f"[WARN] Git push failed: {e} — dashboard saved locally only")
+        return f"https://{github_username}.github.io/{github_repo}/"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  SECTION 16 — MAIN ORCHESTRATOR
@@ -1627,11 +1949,15 @@ def main():
     print(f"      Action items: {len(report.get('action_items', []))}")
     print(f"      No action needed: {report.get('no_action_flag', False)}")
 
-    # ── Save report
+   # ── Save report JSON
     saved_path = save_report(report, portfolio, market)
 
+    # ── Publish dashboard to GitHub Pages
+    print("\n[Publishing dashboard to GitHub Pages...]")
+    dashboard_url = publish_to_github_pages(report, portfolio, market)
+
     # ── Format and send Telegram
-    dashboard_url = os.environ.get("DASHBOARD_URL", "")  # e.g. https://yoursite.com/report
+    print("[Sending Telegram message...]")
     telegram_msg = format_telegram_message(report, INVESTOR_PROFILE, dashboard_url)
     send_telegram_message(telegram_msg)
 
