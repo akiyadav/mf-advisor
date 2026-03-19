@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow, noarchive, nosnippet, noimageindex">
+<meta name="googlebot" content="noindex, nofollow">
+<meta name="bingbot" content="noindex, nofollow">
+<meta http-equiv="X-Robots-Tag" content="noindex, nofollow">
+<title>AFundMentor Pro</title>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Mono:wght@300;400;500&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0b0b10;--bg2:#111118;--bg3:#18181f;--bg4:#20202a;--border:rgba(255,255,255,0.06);--bord2:rgba(255,255,255,0.11);--text:#dcdce8;--muted:#64647a;--muted2:#8e8ea8;--accent:#b8ff4e;--blue:#4eb8ff;--warn:#ffb84e;--danger:#ff5252;--good:#4effa8;--hd:'Bebas Neue',cursive;--body:'DM Sans',sans-serif;--mono:'DM Mono',monospace;}
+*{box-sizing:border-box;margin:0;padding:0;}
+html{scroll-behavior:smooth;}
+body{background:var(--bg);color:var(--text);font-family:var(--body);font-size:14px;line-height:1.65;min-height:100vh;}
+
+/* PIN SCREEN */
+#pin-screen{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;}
+.pin-card{background:var(--bg2);border:1px solid var(--bord2);border-radius:20px;padding:48px 40px 40px;width:100%;max-width:340px;text-align:center;}
+.pin-logo{font-family:var(--hd);font-size:30px;letter-spacing:.08em;color:#fff;margin-bottom:4px;}
+.pin-logo span{color:var(--accent);}
+.pin-subtitle{font-family:var(--mono);font-size:10px;letter-spacing:.12em;color:var(--muted);margin-bottom:36px;}
+.pin-label{font-family:var(--mono);font-size:11px;letter-spacing:.1em;color:var(--muted2);margin-bottom:14px;}
+.pin-dots{display:flex;justify-content:center;gap:16px;margin-bottom:28px;}
+.pin-dot{width:14px;height:14px;border-radius:50%;border:2px solid var(--bord2);background:transparent;transition:all .15s;}
+.pin-dot.filled{background:var(--accent);border-color:var(--accent);transform:scale(1.1);}
+.pin-dot.error{background:var(--danger);border-color:var(--danger);}
+.pin-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:12px;}
+.pin-btn{background:var(--bg3);border:1px solid var(--bord2);border-radius:12px;color:var(--text);font-family:var(--hd);font-size:26px;letter-spacing:.05em;padding:16px 0;cursor:pointer;transition:all .12s;-webkit-tap-highlight-color:transparent;user-select:none;}
+.pin-btn:hover{background:var(--bg4);border-color:rgba(255,255,255,.2);}
+.pin-btn:active{transform:scale(.93);}
+.pin-btn.del{font-family:var(--mono);font-size:16px;color:var(--muted2);}
+.pin-btn.zero{grid-column:2;}
+.pin-error{font-family:var(--mono);font-size:11px;color:var(--danger);letter-spacing:.08em;height:18px;margin-top:8px;opacity:0;transition:opacity .2s;}
+.pin-error.show{opacity:1;}
+.pin-footer{font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:28px;letter-spacing:.06em;}
+
+/* DASHBOARD */
+#dashboard{display:none;}
+nav{position:sticky;top:0;z-index:100;background:rgba(11,11,16,.93);backdrop-filter:blur(14px);border-bottom:1px solid var(--border);padding:12px 0;}
+.nav-inner{max-width:960px;margin:0 auto;padding:0 18px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;}
+.nav-brand{font-family:var(--hd);font-size:18px;letter-spacing:.08em;color:#fff;}
+.nav-brand span{color:var(--accent);}
+.nav-links{display:flex;gap:3px;flex-wrap:wrap;}
+.nav-link{font-family:var(--mono);font-size:10px;letter-spacing:.09em;color:var(--muted2);padding:5px 9px;border-radius:4px;cursor:pointer;border:none;background:transparent;transition:all .15s;}
+.nav-link:hover{color:var(--text);background:var(--bg3);}
+.wrap{max-width:960px;margin:0 auto;padding:0 18px 80px;}
+
+/* HEADER */
+.header{padding:44px 0 36px;border-bottom:1px solid var(--bord2);margin-bottom:36px;animation:fadeUp .5s ease both;}
+.header-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:18px;}
+.tag{font-family:var(--mono);font-size:10px;letter-spacing:.11em;color:var(--muted2);background:var(--bg3);border:1px solid var(--bord2);padding:4px 10px;border-radius:3px;display:inline-flex;align-items:center;gap:6px;}
+.pulse{width:6px;height:6px;border-radius:50%;background:var(--accent);animation:blink 2s infinite;}
+h1{font-family:var(--hd);font-size:clamp(48px,8vw,82px);letter-spacing:.03em;line-height:.92;color:#fff;}
+h1 span{color:var(--accent);}
+.header-meta{display:flex;gap:18px;flex-wrap:wrap;margin-top:14px;}
+.hm{font-family:var(--mono);font-size:11px;color:var(--muted2);}
+.hm strong{color:var(--text);}
+
+/* SCORE HERO */
+.score-hero{display:grid;grid-template-columns:auto 1fr;gap:28px;align-items:center;background:var(--bg2);border:1px solid var(--bord2);border-left:4px solid var(--warn);border-radius:12px;padding:26px 30px;margin-bottom:12px;animation:fadeUp .5s .06s ease both;}
+.big-score{font-family:var(--hd);font-size:88px;line-height:1;color:var(--warn);}
+.big-score sub{font-size:36px;color:var(--muted);}
+.score-right h2{font-family:var(--hd);font-size:24px;letter-spacing:.06em;color:#fff;margin-bottom:8px;}
+.score-right p{font-size:13px;color:var(--muted2);line-height:1.7;max-width:460px;}
+.sbar-wrap{margin-top:14px;max-width:460px;}
+.sbar-track{height:5px;background:var(--bg4);border-radius:3px;overflow:hidden;}
+.sbar-fill{height:100%;border-radius:3px;background:var(--warn);width:0;transition:width 1.3s cubic-bezier(.4,0,.2,1);}
+
+/* SECTIONS */
+.sh{display:flex;align-items:center;gap:10px;margin-bottom:14px;}
+.sh-num{font-family:var(--mono);font-size:10px;letter-spacing:.12em;color:var(--muted);}
+.sh-title{font-family:var(--hd);font-size:26px;letter-spacing:.06em;color:#fff;}
+.sh::after{content:'';flex:1;height:1px;background:var(--bord2);}
+.section{margin-bottom:36px;animation:fadeUp .5s ease both;}
+
+/* PILLARS */
+.pillars{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:36px;}
+.pillar{background:var(--bg2);border:1px solid var(--bord2);border-radius:8px;padding:14px 10px;text-align:center;animation:fadeUp .5s ease both;}
+.pillar-name{font-family:var(--mono);font-size:9px;letter-spacing:.07em;color:var(--muted);margin-bottom:8px;line-height:1.4;}
+.pillar-val{font-family:var(--hd);font-size:30px;line-height:1;}
+.pillar-bar{height:3px;background:var(--bg4);border-radius:2px;margin-top:8px;overflow:hidden;}
+.pillar-fill{height:100%;border-radius:2px;width:0;transition:width 1.5s cubic-bezier(.4,0,.2,1);}
+
+/* BRUTAL */
+.brutal{background:linear-gradient(135deg,rgba(255,82,82,.06),var(--bg2));border:1px solid rgba(255,82,82,.2);border-radius:12px;padding:22px 26px;margin-bottom:36px;}
+.brutal-label{font-family:var(--mono);font-size:10px;letter-spacing:.13em;color:var(--danger);margin-bottom:14px;}
+.bi{display:flex;gap:12px;margin-bottom:12px;font-size:13px;line-height:1.7;}
+.bi:last-child{margin-bottom:0;}
+.bi-icon{width:20px;height:20px;border-radius:50%;background:rgba(255,82,82,.1);border:1px solid rgba(255,82,82,.25);display:flex;align-items:center;justify-content:center;font-size:9px;color:var(--danger);flex-shrink:0;margin-top:2px;}
+.bi strong{color:#fff;}
+
+/* FUNDS */
+.funds-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;margin-bottom:36px;}
+.fc{background:var(--bg2);border:1px solid var(--bord2);border-radius:10px;padding:18px;position:relative;overflow:hidden;transition:border-color .2s;animation:fadeUp .5s ease both;}
+.fc:hover{border-color:rgba(255,255,255,.17);}
+.fc::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;}
+.fc.g::before{background:var(--good);}.fc.w::before{background:var(--warn);}.fc.b::before{background:var(--danger);}
+.fc-name{font-size:12px;font-weight:500;margin-bottom:3px;line-height:1.4;}
+.fc-cat{font-family:var(--mono);font-size:9px;color:var(--muted);margin-bottom:12px;letter-spacing:.05em;}
+.fc-score-row{display:flex;align-items:baseline;gap:5px;margin-bottom:8px;}
+.fc-score{font-family:var(--hd);font-size:44px;line-height:1;}
+.fc-score.g{color:var(--good);}.fc-score.w{color:var(--warn);}.fc-score.b{color:var(--danger);}
+.fc-denom{font-family:var(--mono);font-size:12px;color:var(--muted);}
+.verdict{font-family:var(--mono);font-size:9px;letter-spacing:.09em;padding:3px 8px;border-radius:3px;display:inline-block;margin-bottom:12px;}
+.verdict.hold{background:rgba(78,255,168,.09);color:var(--good);}
+.verdict.watch{background:rgba(255,184,78,.09);color:var(--warn);}
+.verdict.switch{background:rgba(255,82,82,.09);color:var(--danger);}
+.fc-stats{display:grid;grid-template-columns:1fr 1fr;gap:7px;}
+.fcs-label{font-family:var(--mono);font-size:9px;color:var(--muted);margin-bottom:2px;}
+.fcs-val{font-size:12px;font-weight:500;}
+.fcs-val.pos{color:var(--good);}.fcs-val.neg{color:var(--danger);}.fcs-val.warn{color:var(--warn);}
+.fc-flag{margin-top:10px;padding-top:10px;border-top:1px solid var(--border);font-size:11px;color:var(--muted2);line-height:1.5;}
+.fc-flag strong{color:var(--warn);}
+
+/* RETURNS */
+.returns-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-bottom:36px;}
+.rc{background:var(--bg2);border:1px solid var(--bord2);border-radius:10px;padding:16px 18px;animation:fadeUp .5s ease both;}
+.rc-label{font-family:var(--mono);font-size:9px;letter-spacing:.09em;color:var(--muted);margin-bottom:7px;}
+.rc-val{font-family:var(--hd);font-size:34px;line-height:1;margin-bottom:3px;}
+.rc-sub{font-size:11px;color:var(--muted2);}
+
+/* PROJECTION */
+.proj-wrap{background:var(--bg2);border:1px solid var(--bord2);border-radius:10px;overflow:hidden;margin-bottom:36px;}
+.proj-table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:12px;}
+.proj-table th{text-align:left;padding:11px 14px;font-size:9px;letter-spacing:.09em;color:var(--muted);border-bottom:1px solid var(--bord2);font-weight:400;background:var(--bg3);}
+.proj-table td{padding:12px 14px;border-bottom:1px solid var(--border);}
+.proj-table tr:last-child td{border-bottom:none;}
+.proj-table tr:hover td{background:var(--bg3);}
+.proj-table .hl td{background:rgba(184,255,78,.03);}
+.proj-table .hl td:first-child{border-left:3px solid var(--accent);padding-left:11px;}
+.cv{color:var(--accent);font-weight:500;}.gneg{color:var(--danger);}.gpos{color:var(--good);}
+
+/* LOAN vs SIP */
+.lsip{background:var(--bg2);border:1px solid var(--bord2);border-radius:10px;padding:20px 24px;margin-bottom:36px;}
+.lsip-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:14px;}
+.lsip-side{padding:14px;border-radius:8px;border:1px solid var(--bord2);}
+.lsip-side h4{font-family:var(--mono);font-size:10px;letter-spacing:.09em;margin-bottom:8px;}
+.lsip-side.inv h4{color:var(--good);}.lsip-side.pre h4{color:var(--blue);}
+.lsip-num{font-family:var(--hd);font-size:28px;line-height:1;margin-bottom:4px;}
+.lsip-sub{font-size:11px;color:var(--muted2);}
+.verdict-banner{margin-top:12px;background:rgba(184,255,78,.05);border:1px solid rgba(184,255,78,.13);border-radius:6px;padding:10px 14px;font-size:12px;color:var(--accent);font-family:var(--mono);}
+
+/* COST */
+.cost-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:36px;}
+.cc{background:var(--bg2);border:1px solid var(--bord2);border-radius:10px;padding:18px;}
+.cc-title{font-family:var(--mono);font-size:10px;letter-spacing:.1em;color:var(--muted);margin-bottom:12px;}
+.cc-row{display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--border);font-size:12px;}
+.cc-row:last-child{border-bottom:none;}
+.cc-name{color:var(--muted2);}
+.cc-amt{font-family:var(--mono);font-weight:500;}
+.cc-amt.bad{color:var(--danger);}.cc-amt.good{color:var(--good);}.cc-amt.warn{color:var(--warn);}
+
+/* STEP-UP */
+.su-block{background:var(--bg2);border:1px solid var(--bord2);border-left:4px solid var(--accent);border-radius:12px;padding:22px 26px;margin-bottom:36px;}
+.su-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin-top:14px;}
+.su-label{font-family:var(--mono);font-size:9px;letter-spacing:.09em;color:var(--muted);margin-bottom:5px;}
+.su-val{font-family:var(--hd);font-size:30px;color:var(--accent);line-height:1;}
+.su-note{font-size:11px;color:var(--muted2);margin-top:3px;}
+.su-reason{margin-top:16px;padding-top:14px;border-top:1px solid var(--border);font-size:13px;color:var(--muted2);line-height:1.7;}
+.su-reason strong{color:var(--text);}
+
+/* CAREER */
+.career{background:linear-gradient(135deg,rgba(78,184,255,.05),var(--bg2));border:1px solid rgba(78,184,255,.17);border-radius:10px;padding:18px 22px;margin-bottom:36px;display:flex;gap:18px;align-items:flex-start;}
+.career-dot{width:46px;height:46px;border-radius:10px;background:rgba(78,255,168,.08);border:1px solid rgba(78,255,168,.2);display:flex;align-items:center;justify-content:center;font-family:var(--hd);font-size:20px;color:var(--good);flex-shrink:0;}
+.career-body h4{font-family:var(--mono);font-size:10px;letter-spacing:.09em;color:var(--blue);margin-bottom:6px;}
+.career-body p{font-size:13px;color:var(--muted2);line-height:1.7;}
+
+/* TAX */
+.tax-block{background:linear-gradient(135deg,rgba(184,255,78,.04),var(--bg2));border:1px solid rgba(184,255,78,.16);border-radius:10px;padding:18px 22px;margin-bottom:36px;}
+.tax-block h4{font-family:var(--mono);font-size:10px;letter-spacing:.11em;color:var(--accent);margin-bottom:8px;}
+.tax-block p{font-size:13px;color:var(--muted2);line-height:1.7;}
+.tax-block strong{color:var(--accent);}
+
+/* HISTORY */
+.history-wrap{background:var(--bg2);border:1px solid var(--bord2);border-radius:10px;padding:20px 22px;margin-bottom:36px;}
+.history-bars{display:flex;align-items:flex-end;gap:7px;height:80px;margin-top:14px;}
+.hbar-group{flex:1;display:flex;flex-direction:column;align-items:center;gap:5px;}
+.hbar{width:100%;border-radius:3px 3px 0 0;min-height:4px;transition:height .8s cubic-bezier(.4,0,.2,1);}
+.hbar-label{font-family:var(--mono);font-size:9px;color:var(--muted);}
+.hbar-val{font-family:var(--mono);font-size:9px;color:var(--muted2);}
+
+/* ACTIONS */
+.action-block{background:var(--bg2);border:1px solid var(--bord2);border-radius:12px;padding:22px 26px;margin-bottom:36px;}
+.action-item{display:flex;gap:12px;padding:13px 0;border-bottom:1px solid var(--border);align-items:flex-start;}
+.action-item:first-child{padding-top:0;}
+.action-item:last-child{border-bottom:none;padding-bottom:0;}
+.atag{font-family:var(--mono);font-size:9px;letter-spacing:.09em;padding:3px 8px;border-radius:3px;flex-shrink:0;margin-top:2px;min-width:66px;text-align:center;}
+.atag.urgent{background:rgba(255,82,82,.1);color:var(--danger);border:1px solid rgba(255,82,82,.2);}
+.atag.advisory{background:rgba(255,184,78,.1);color:var(--warn);border:1px solid rgba(255,184,78,.2);}
+.atag.fyi{background:rgba(78,255,168,.07);color:var(--good);border:1px solid rgba(78,255,168,.14);}
+.atext{font-size:13px;line-height:1.65;}
+.atext strong{color:#fff;font-weight:500;}
+.aimpact{font-family:var(--mono);font-size:11px;color:var(--muted2);margin-top:4px;}
+.aimpact span{color:var(--accent);}
+
+/* FOOTER */
+.footer{padding:22px 0 0;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;}
+.footer-note{font-family:var(--mono);font-size:10px;color:var(--muted);letter-spacing:.05em;}
+
+@keyframes fadeUp{from{opacity:0;transform:translateY(14px);}to{opacity:1;transform:translateY(0);}}
+@keyframes blink{0%,100%{opacity:1;}50%{opacity:.25;}}
+@keyframes shake{0%,100%{transform:translateX(0);}20%,60%{transform:translateX(-8px);}40%,80%{transform:translateX(8px);}}
+
+@media(max-width:600px){
+  .score-hero{grid-template-columns:1fr;}
+  .big-score{font-size:70px;}
+  .pillars{grid-template-columns:repeat(3,1fr);}
+  .cost-grid,.lsip-grid,.su-grid{grid-template-columns:1fr;}
+  .pin-card{padding:36px 24px 32px;}
+  .funds-grid{grid-template-columns:1fr;}
+}
+</style>
+</head>
+<body>
+
+<!-- PIN SCREEN -->
+<div id="pin-screen">
+  <div class="pin-card">
+    <div class="pin-logo">AFund<span>Mentor</span></div>
+    <div class="pin-subtitle">PRIVATE REPORT · ENTER PIN</div>
+    <div class="pin-label">Enter your 4-digit PIN</div>
+    <div class="pin-dots">
+      <div class="pin-dot" id="d0"></div>
+      <div class="pin-dot" id="d1"></div>
+      <div class="pin-dot" id="d2"></div>
+      <div class="pin-dot" id="d3"></div>
+    </div>
+    <div class="pin-grid">
+      <button class="pin-btn" onclick="pinInput('1')">1</button>
+      <button class="pin-btn" onclick="pinInput('2')">2</button>
+      <button class="pin-btn" onclick="pinInput('3')">3</button>
+      <button class="pin-btn" onclick="pinInput('4')">4</button>
+      <button class="pin-btn" onclick="pinInput('5')">5</button>
+      <button class="pin-btn" onclick="pinInput('6')">6</button>
+      <button class="pin-btn" onclick="pinInput('7')">7</button>
+      <button class="pin-btn" onclick="pinInput('8')">8</button>
+      <button class="pin-btn" onclick="pinInput('9')">9</button>
+      <button class="pin-btn zero" onclick="pinInput('0')">0</button>
+      <button class="pin-btn del" onclick="pinDelete()">&#9003;</button>
+    </div>
+    <div class="pin-error" id="pin-error">Incorrect PIN — try again</div>
+    <div class="pin-footer">AFundMentor Pro &middot; Private Report</div>
+  </div>
+</div>
+
+<!-- DASHBOARD -->
+<div id="dashboard">
+<nav>
+  <div class="nav-inner">
+    <div class="nav-brand">AFund<span>Mentor</span></div>
+    <div class="nav-links">
+      <button class="nav-link" onclick="goTo('score')">Score</button>
+      <button class="nav-link" onclick="goTo('funds')">Funds</button>
+      <button class="nav-link" onclick="goTo('returns')">Returns</button>
+      <button class="nav-link" onclick="goTo('projection')">Projection</button>
+      <button class="nav-link" onclick="goTo('actions')">Actions</button>
+    </div>
+  </div>
+</nav>
+<div class="wrap">
+
+  <header class="header">
+    <div class="header-top">
+      <div class="tag"><span class="pulse"></span>AI-POWERED &middot; AUTO-GENERATED</div>
+      <div class="tag" id="data-tag">DUMMY DATA</div>
+    </div>
+    <h1>WEALTH<br><span>REPORT</span></h1>
+    <div class="header-meta">
+      <div class="hm">PERIOD <strong id="period">—</strong></div>
+      <div class="hm">INVESTOR <strong>Ankit</strong></div>
+      <div class="hm">HORIZON <strong>15 yr &middot; 2041</strong></div>
+      <div class="hm">SIP <strong>&#8377;20,000/mo</strong></div>
+    </div>
+  </header>
+
+  <!-- SCORE -->
+  <div id="score" class="score-hero">
+    <div class="big-score" id="msv">—<sub>/10</sub></div>
+    <div class="score-right">
+      <h2 id="sgrade">PORTFOLIO SCORE</h2>
+      <p id="sreason">Loading...</p>
+      <div class="sbar-wrap"><div class="sbar-track"><div class="sbar-fill" id="masterBar"></div></div></div>
+    </div>
+  </div>
+
+  <!-- PILLARS -->
+  <div class="pillars">
+    <div class="pillar"><div class="pillar-name">Portfolio<br>Quality</div><div class="pillar-val" id="p0">—</div><div class="pillar-bar"><div class="pillar-fill" id="pf0"></div></div></div>
+    <div class="pillar"><div class="pillar-name">Cost<br>Intelligence</div><div class="pillar-val" id="p1">—</div><div class="pillar-bar"><div class="pillar-fill" id="pf1"></div></div></div>
+    <div class="pillar"><div class="pillar-name">Portfolio<br>Structure</div><div class="pillar-val" id="p2">—</div><div class="pillar-bar"><div class="pillar-fill" id="pf2"></div></div></div>
+    <div class="pillar"><div class="pillar-name">Personal<br>Risk</div><div class="pillar-val" id="p3">—</div><div class="pillar-bar"><div class="pillar-fill" id="pf3"></div></div></div>
+    <div class="pillar"><div class="pillar-name">Behaviour<br>+Strategy</div><div class="pillar-val" id="p4">—</div><div class="pillar-bar"><div class="pillar-fill" id="pf4"></div></div></div>
+  </div>
+
+  <!-- BRUTAL -->
+  <div class="section">
+    <div class="sh"><span class="sh-num">01</span><span class="sh-title">Brutal Findings</span></div>
+    <div class="brutal">
+      <div class="brutal-label">&#9670; UNFILTERED — NO SUGAR COATING</div>
+      <div id="brutal-container"></div>
+    </div>
+  </div>
+
+  <!-- FUNDS -->
+  <div id="funds" class="section">
+    <div class="sh"><span class="sh-num">02</span><span class="sh-title">Fund Ratings</span></div>
+    <div class="funds-grid" id="funds-grid"></div>
+  </div>
+
+  <!-- RETURNS -->
+  <div id="returns" class="section">
+    <div class="sh"><span class="sh-num">03</span><span class="sh-title">Your Actual Returns</span></div>
+    <div class="returns-grid" id="returns-grid"></div>
+  </div>
+
+  <!-- PROJECTION -->
+  <div id="projection" class="section">
+    <div class="sh"><span class="sh-num">04</span><span class="sh-title">15-Year Projection</span></div>
+    <div class="proj-wrap">
+      <table class="proj-table">
+        <thead><tr><th>Scenario</th><th>Monthly SIP</th><th>2041 Nominal</th><th>2041 Real &#8377;</th></tr></thead>
+        <tbody id="proj-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- LOAN vs SIP -->
+  <div class="section">
+    <div class="sh"><span class="sh-num">05</span><span class="sh-title">Home Loan vs SIP</span></div>
+    <div class="lsip">
+      <p style="font-size:13px;color:var(--muted2)">Monthly verdict: prepay one extra EMI or invest that same amount?</p>
+      <div class="lsip-grid">
+        <div class="lsip-side inv"><h4>INVEST IN SIP</h4><div class="lsip-num" style="color:var(--good)">10.5%</div><div class="lsip-sub">Post-tax equity return</div></div>
+        <div class="lsip-side pre"><h4>PREPAY LOAN</h4><div class="lsip-num" style="color:var(--blue)">8.5%</div><div class="lsip-sub">Guaranteed return saved</div></div>
+      </div>
+      <div class="verdict-banner" id="lsip-verdict">Loading...</div>
+    </div>
+  </div>
+
+  <!-- COSTS -->
+  <div class="section">
+    <div class="sh"><span class="sh-num">06</span><span class="sh-title">Cost Intelligence</span></div>
+    <div class="cost-grid" id="cost-grid"></div>
+  </div>
+
+  <!-- STEP-UP -->
+  <div class="section">
+    <div class="sh"><span class="sh-num">07</span><span class="sh-title">SIP Step-Up Guidance</span></div>
+    <div class="su-block">
+      <div style="font-family:var(--mono);font-size:10px;letter-spacing:.09em;color:var(--muted);margin-bottom:4px">CURRENT PHASE</div>
+      <div style="font-family:var(--hd);font-size:22px;color:var(--accent)" id="su-phase">Loading...</div>
+      <div class="su-grid" id="su-grid"></div>
+      <div class="su-reason" id="su-reason"></div>
+    </div>
+  </div>
+
+  <!-- CAREER -->
+  <div class="section">
+    <div class="sh"><span class="sh-num">08</span><span class="sh-title">Career Resilience</span></div>
+    <div class="career">
+      <div class="career-dot">EV</div>
+      <div class="career-body"><h4 id="career-signal">SIGNAL: —</h4><p id="career-body">Loading...</p></div>
+    </div>
+  </div>
+
+  <!-- TAX -->
+  <div class="section">
+    <div class="sh"><span class="sh-num">09</span><span class="sh-title">Tax Harvest Alert</span></div>
+    <div class="tax-block"><h4 id="tax-title">CHECKING...</h4><p id="tax-body">Loading...</p></div>
+  </div>
+
+  <!-- HISTORY -->
+  <div class="section">
+    <div class="sh"><span class="sh-num">10</span><span class="sh-title">Score History</span></div>
+    <div class="history-wrap">
+      <p style="font-size:12px;color:var(--muted2)">Monthly portfolio score trend</p>
+      <div class="history-bars" id="histBars"></div>
+    </div>
+  </div>
+
+  <!-- ACTIONS -->
+  <div id="actions" class="section">
+    <div class="sh"><span class="sh-num">11</span><span class="sh-title">Actions This Month</span></div>
+    <div class="action-block" id="action-block">Loading...</div>
+  </div>
+
+  <footer class="footer">
+    <div class="footer-note">AFUNDMENTOR PRO v1.0 &middot; GEMINI AI &middot; MFAPI.IN + ZERODHA</div>
+    <div class="footer-note">Next run: <strong style="color:var(--blue)" id="next-run">—</strong></div>
+  </footer>
+</div>
+</div>
+
+<script>
+// ── PIN ──────────────────────────────────────────
+const PIN = "1402";
+let cur = "";
+
+function pinInput(d) {
+  if (cur.length >= 4) return;
+  cur += d;
+  dots();
+  if (cur.length === 4) setTimeout(check, 120);
+}
+function pinDelete() {
+  cur = cur.slice(0,-1);
+  dots();
+  document.getElementById("pin-error").classList.remove("show");
+}
+function dots() {
+  for (let i=0;i<4;i++) {
+    const el = document.getElementById("d"+i);
+    el.classList.toggle("filled", i < cur.length);
+    el.classList.remove("error");
+  }
+}
+function check() {
+  if (cur === PIN) {
+    document.getElementById("pin-screen").style.display = "none";
+    document.getElementById("dashboard").style.display = "block";
+    init();
+  } else {
+    document.querySelectorAll(".pin-dot").forEach(d=>{d.classList.remove("filled");d.classList.add("error");});
+    document.getElementById("pin-error").classList.add("show");
+    const c = document.querySelector(".pin-card");
+    c.style.animation = "shake .4s ease";
+    setTimeout(()=>{c.style.animation="";document.querySelectorAll(".pin-dot").forEach(d=>d.classList.remove("error"));cur="";},450);
+  }
+}
+document.addEventListener("keydown", e=>{
+  if (document.getElementById("pin-screen").style.display==="none") return;
+  if (e.key>="0"&&e.key<="9") pinInput(e.key);
+  if (e.key==="Backspace") pinDelete();
+});
+
+// ── HELPERS ──────────────────────────────────────
+function goTo(id){const el=document.getElementById(id);if(el)el.scrollIntoView({behavior:"smooth",block:"start"});}
+function fmt(n){if(!n&&n!==0)return "—";return "&#8377;"+Number(n).toLocaleString("en-IN");}
+function sc(s){if(s>=8)return "var(--good)";if(s>=6)return "var(--warn)";return "var(--danger)";}
+function sg(s){if(s>=8)return "STRONG";if(s>=6)return "ADEQUATE";if(s>=4)return "WEAK";return "CRITICAL";}
+
+// ── INIT DASHBOARD ────────────────────────────────
+function init() {
+  const raw = window.REPORT_DATA;
+  const R = (raw&&raw.report) ? raw.report : dummy();
+  const live = !!(raw&&raw.report);
+  document.getElementById("data-tag").textContent = live ? "LIVE DATA · ZERODHA" : "DUMMY DATA";
+  const now = new Date();
+  document.getElementById("period").textContent = now.toLocaleString("en-IN",{month:"long",year:"numeric"});
+  const nx = new Date(now.getFullYear(),now.getMonth()+1,0);
+  document.getElementById("next-run").textContent = nx.toLocaleDateString("en-IN",{day:"2-digit",month:"short",year:"numeric"});
+
+  // Score
+  const s = R.master_score||0;
+  document.getElementById("msv").innerHTML = s+"<sub>/10</sub>";
+  document.getElementById("msv").style.color = sc(s);
+  document.getElementById("sgrade").textContent = "PORTFOLIO SCORE — "+sg(s);
+  document.getElementById("sreason").textContent = R.master_score_reasoning||"";
+  document.querySelector(".sbar-fill").style.background = sc(s);
+  setTimeout(()=>{document.getElementById("masterBar").style.width=(s*10)+"%";},400);
+
+  // Pillars
+  const p = R.pillar_scores||{};
+  ["portfolio_quality","cost_intelligence","portfolio_construction","personal_risk","behaviour_strategy"].forEach((k,i)=>{
+    const v=p[k]||0;
+    document.getElementById("p"+i).textContent=v;
+    document.getElementById("p"+i).style.color=sc(v);
+    document.getElementById("pf"+i).style.background=sc(v);
+    setTimeout(()=>{document.getElementById("pf"+i).style.width=(v*10)+"%";},500);
+  });
+
+  // Brutal
+  const bc = document.getElementById("brutal-container");
+  bc.innerHTML = (R.brutal_honesty_block||[]).map(f=>`<div class="bi"><div class="bi-icon">!</div><div>${f}</div></div>`).join("");
+
+  // Funds
+  document.getElementById("funds-grid").innerHTML = (R.fund_ratings||[]).map(f=>{
+    const cls=f.score>=7?"g":f.score>=5?"w":"b";
+    const vc=(f.verdict||"").toLowerCase();
+    return `<div class="fc ${cls}">
+      <div class="fc-name">${f.fund_name||""}</div>
+      <div class="fc-cat">${(f.alpha_vs_category||"").toUpperCase()} ALPHA &middot; ${(f.expense_ratio_verdict||"").toUpperCase()} COST</div>
+      <div class="fc-score-row"><div class="fc-score ${cls}">${f.score}</div><div class="fc-denom">/10</div></div>
+      <span class="verdict ${vc}">${f.verdict||""}</span>
+      <div class="fc-stats">
+        <div><div class="fcs-label">1YR CAGR</div><div class="fcs-val pos">${f["1yr_cagr_pct"]?f["1yr_cagr_pct"]+"%":"—"}</div></div>
+        <div><div class="fcs-label">3YR CAGR</div><div class="fcs-val pos">${f["3yr_cagr_pct"]?f["3yr_cagr_pct"]+"%":"—"}</div></div>
+        <div><div class="fcs-label">MANAGER RISK</div><div class="fcs-val ${f.manager_risk==="low"?"":"warn"}">${f.manager_risk||"—"}</div></div>
+        <div><div class="fcs-label">EXIT COST</div><div class="fcs-val">${f.exit_cost_inr?fmt(f.exit_cost_inr):"Nil"}</div></div>
+      </div>
+      ${f.key_finding?`<div class="fc-flag">${f.key_finding}</div>`:""}
+      ${f.action?`<div class="fc-flag" style="margin-top:6px"><strong>Action:</strong> ${f.action}</div>`:""}
+    </div>`;
+  }).join("");
+
+  // Returns
+  const ret=R.returns_analysis||{};
+  document.getElementById("returns-grid").innerHTML=[
+    {l:"XIRR (REAL RETURN)",    v:(ret.portfolio_xirr_pct||0)+"%",             s:"On invested capital",   c:"var(--warn)"},
+    {l:"POST-CPI REAL RETURN",  v:(ret.real_return_post_inflation_pct||0)+"%", s:"After 7% inflation",    c:"var(--accent)"},
+    {l:"TOTAL INVESTED",        v:fmt(ret.total_invested_inr),                  s:"Since SIP start",       c:"var(--text)"},
+    {l:"CURRENT VALUE",         v:fmt(ret.current_value_inr),                   s:"Portfolio today",       c:"var(--good)"},
+    {l:"ABSOLUTE GAIN",         v:fmt(ret.absolute_gain_inr),                   s:"Total profit",          c:"var(--good)"},
+    {l:"VS NIFTY 50",           v:(ret.vs_nifty50_pct||0)+"%",                  s:"Benchmark gap",         c:ret.vs_nifty50_pct>=0?"var(--good)":"var(--danger)"},
+  ].map(r=>`<div class="rc"><div class="rc-label">${r.l}</div><div class="rc-val" style="color:${r.c}">${r.v}</div><div class="rc-sub">${r.s}</div></div>`).join("");
+
+  // Projection
+  const pr=R.projection||{};
+  document.getElementById("proj-body").innerHTML=`
+    <tr><td>Flat SIP — no step-up</td><td>&#8377;20,000</td><td class="cv">${fmt(pr.corpus_at_15yr_flat_sip_nominal_inr)}</td><td>${fmt(pr.corpus_at_15yr_flat_sip_real_inr)}</td></tr>
+    <tr class="hl"><td><strong>Step-up 10% annually &#9733;</strong></td><td>&#8377;20k&#8594;&#8377;84k</td><td class="cv">${fmt(pr.corpus_at_15yr_stepup_nominal_inr)}</td><td class="gpos">${fmt(pr.corpus_at_15yr_stepup_real_inr)}</td></tr>
+    <tr><td>SIP needed for &#8377;1Cr</td><td style="color:var(--warn)">${fmt(pr.sip_needed_for_1cr_inr)}/mo</td><td colspan="2" style="color:var(--muted2);font-size:11px">${pr.wealth_gap_assessment||""}</td></tr>`;
+
+  // Loan vs SIP
+  const lv=R.loan_vs_sip_verdict||{};
+  document.getElementById("lsip-verdict").textContent="VERDICT: "+(lv.verdict||"—")+" — "+(lv.reasoning||"");
+
+  // Costs
+  const co=R.cost_summary||{};
+  document.getElementById("cost-grid").innerHTML=`
+    <div class="cc">
+      <div class="cc-title">ANNUAL COST DRAIN</div>
+      <div class="cc-row"><span class="cc-name">Total expense drag</span><span class="cc-amt bad">${fmt(co.total_annual_expense_drag_inr)}/yr</span></div>
+      <div class="cc-row"><span class="cc-name">Regular plan loss</span><span class="cc-amt bad">${fmt(co.regular_plan_annual_loss_inr)}/yr</span></div>
+      <div class="cc-row"><span class="cc-name">15yr compounding loss</span><span class="cc-amt warn">${fmt(co["15yr_compounding_loss_from_regular_plan_inr"])}</span></div>
+    </div>
+    <div class="cc">
+      <div class="cc-title">IF YOU ACT NOW</div>
+      ${(co.recommended_cost_actions||[]).map(a=>`<div class="cc-row"><span class="cc-name">${a}</span><span class="cc-amt good">Act</span></div>`).join("")}
+    </div>`;
+
+  // Step-up
+  const su=R.stepup_guidance||{};
+  document.getElementById("su-phase").textContent=su.phase_label||"—";
+  document.getElementById("su-grid").innerHTML=`
+    <div><div class="su-label">SIP INCREASE (APRIL)</div><div class="su-val">&#8377;${(su.recommended_sip_increase_inr||0).toLocaleString("en-IN")}</div><div class="su-note">Add to monthly SIP</div></div>
+    <div><div class="su-label">BUFFER ADDITION</div><div class="su-val" style="color:var(--blue)">&#8377;${(su.buffer_addition_inr||0).toLocaleString("en-IN")}</div><div class="su-note">To savings account</div></div>
+    <div><div class="su-label">PHASE</div><div class="su-val" style="color:var(--warn)">${su.phase||"—"}</div><div class="su-note">${su.phase_label||""}</div></div>`;
+  document.getElementById("su-reason").innerHTML=`<strong>April action:</strong> ${su.april_action||""}<br><br>${su.reasoning||""}`;
+
+  // Career
+  const ca=R.career_resilience_flag||{};
+  document.getElementById("career-signal").textContent="SIGNAL: "+(ca.signal||"—")+" — "+(ca.income_risk_level||"").toUpperCase()+" INCOME RISK";
+  document.getElementById("career-body").textContent=(ca.ev_sector_status||"")+" "+(ca.implication_for_sip||"");
+
+  // Tax
+  const tx=R.tax_harvest_alert||{};
+  if(tx.opportunity_exists){
+    document.getElementById("tax-title").textContent="OPPORTUNITY OPEN — ACT NOW";
+    document.getElementById("tax-body").innerHTML=`Book <strong>${fmt(tx.ltcg_headroom_inr)}</strong> of LTCG gains — pay zero tax. ${tx.recommended_action||""}`;
+  } else {
+    document.getElementById("tax-title").textContent="NO HARVEST NEEDED THIS MONTH";
+    document.getElementById("tax-body").textContent="LTCG headroom already utilised or no qualifying gains available.";
+  }
+
+  // History
+  const s0=R.master_score||0;
+  const hist=[{m:"Apr",v:5.4},{m:"May",v:5.6},{m:"Jun",v:5.9},{m:"Jul",v:5.7},{m:"Aug",v:6.0},{m:"Sep",v:5.8},{m:"Oct",v:6.1},{m:"Nov",v:6.3},{m:"Dec",v:6.0},{m:"Jan",v:6.2},{m:"Feb",v:6.0},{m:"Mar",v:s0,c:true}];
+  const hc=document.getElementById("histBars");
+  hc.innerHTML="";
+  hist.forEach(d=>{
+    const col=d.c?"var(--accent)":sc(d.v);
+    const g=document.createElement("div");g.className="hbar-group";
+    g.innerHTML=`<div class="hbar-val">${d.v}</div><div class="hbar" style="background:${col};height:0" data-h="${d.v*10}"></div><div class="hbar-label">${d.m}</div>`;
+    hc.appendChild(g);
+  });
+  setTimeout(()=>{document.querySelectorAll(".hbar").forEach(b=>{b.style.height=b.dataset.h+"%";b.style.transition="height .8s cubic-bezier(.4,0,.2,1)";});},600);
+
+  // Actions
+  const ac=R.action_items||[];
+  const ab=document.getElementById("action-block");
+  if(!ac.length){
+    ab.innerHTML=`<div style="text-align:center;padding:28px;color:var(--good);font-family:var(--hd);font-size:26px">NO ACTION REQUIRED</div>`;
+  } else {
+    ab.innerHTML=ac.map(a=>{
+      const tg=(a.priority||"FYI").toLowerCase();
+      return `<div class="action-item"><span class="atag ${tg}">${a.priority}</span><div><div class="atext">${a.action}</div>${a.impact_inr?`<div class="aimpact">Impact: <span>${fmt(a.impact_inr)}</span> &middot; By: ${a.deadline||"This month"}</div>`:""}</div></div>`;
+    }).join("");
+  }
+}
+
+// ── DUMMY DATA ────────────────────────────────────
+function dummy(){return{master_score:6.1,master_score_reasoning:"Portfolio functional but suboptimal. Two funds need action. Two are solid. Immediate fixes lift score to 7.5+ next month.",pillar_scores:{portfolio_quality:6.4,cost_intelligence:5.2,portfolio_construction:6.0,personal_risk:6.8,behaviour_strategy:8.0},fund_ratings:[{fund_name:"Parag Parikh Flexi Cap",score:8.4,verdict:"HOLD","1yr_cagr_pct":18.4,"3yr_cagr_pct":16.2,alpha_vs_category:"positive",expense_ratio_verdict:"cheap",manager_risk:"low",exit_cost_inr:0,key_finding:"Best fund in portfolio. Long tenure manager, true global diversification.",action:"Hold. Increase SIP here on next step-up."},{fund_name:"Axis Bluechip Fund",score:5.8,verdict:"WATCH","1yr_cagr_pct":13.1,"3yr_cagr_pct":9.8,alpha_vs_category:"neutral",expense_ratio_verdict:"expensive",manager_risk:"medium",exit_cost_inr:0,key_finding:"Regular plan silently draining Rs 1,840/year for zero benefit.",action:"Switch to Direct plan. 10 mins. No exit load. No tax."},{fund_name:"Mirae Asset Large Cap",score:4.9,verdict:"SWITCH","1yr_cagr_pct":12.2,"3yr_cagr_pct":10.4,alpha_vs_category:"negative",expense_ratio_verdict:"expensive",manager_risk:"low",exit_cost_inr:730,key_finding:"Closet large cap. Negative alpha over 3yr. 1.68% expense for index returns.",action:"Switch to UTI Nifty 50 Index Fund Direct. Net saving Rs 8,400/yr."},{fund_name:"SBI Small Cap Fund",score:7.6,verdict:"HOLD","1yr_cagr_pct":22.6,"3yr_cagr_pct":19.8,alpha_vs_category:"positive",expense_ratio_verdict:"fair",manager_risk:"low",exit_cost_inr:0,key_finding:"Strong performer. AUM growing — monitor deployment quality.",action:"Hold. Review AUM in 6 months."}],returns_analysis:{portfolio_xirr_pct:13.4,real_return_post_inflation_pct:6.4,total_invested_inr:480000,current_value_inr:560000,absolute_gain_inr:80000,vs_nifty50_pct:-1.2},projection:{corpus_at_15yr_flat_sip_nominal_inr:9990000,corpus_at_15yr_flat_sip_real_inr:4170000,corpus_at_15yr_stepup_nominal_inr:20900000,corpus_at_15yr_stepup_real_inr:8730000,sip_needed_for_1cr_inr:20000,wealth_gap_assessment:"Flat SIP = Rs 41.7L real. Step-up = Rs 87.3L. Consistency and annual step-up are the only variables you control."},cost_summary:{total_annual_expense_drag_inr:8920,regular_plan_annual_loss_inr:1840,"15yr_compounding_loss_from_regular_plan_inr":110000,recommended_cost_actions:["Switch Axis to Direct — saves Rs 1,840/yr immediately","Switch Mirae to UTI Nifty 50 Index — saves Rs 8,400/yr net"]},stepup_guidance:{phase:2,phase_label:"Parallel Build",recommended_sip_increase_inr:5000,buffer_addition_inr:5000,april_action:"Split April increment: Rs 5k SIP + Rs 5k buffer. Buffer closes in ~5 months.",reasoning:"Emergency fund at 3.5 months. Split 50/50 until buffer hits Rs 6L, then full increment to SIP."},loan_vs_sip_verdict:{verdict:"INVEST",reasoning:"Equity post-tax 10.5% beats loan cost 8.5% by 2%. Continue SIP priority. Revisit if RBI hikes restart."},tax_harvest_alert:{opportunity_exists:true,ltcg_headroom_inr:125000,recommended_action:"Redeem Rs 1.25L from Parag Parikh before 31 March. Pay zero tax. Reinvest same day. Repeat every Jan-Mar."},career_resilience_flag:{signal:"POSITIVE",ev_sector_status:"EV charging infra up 34% YoY. FAME III strong. Your dual domain is in high demand.",income_risk_level:"low",implication_for_sip:"Strong position supports aggressive SIP and step-up at April increment."},brutal_honesty_block:["You are in a Regular plan for Axis Bluechip — paying Rs 1,840/year to a distributor for nothing. Fix in 10 minutes.","Mirae Asset has -0.6% alpha over 3 years at 1.68% expense ratio. You are paying for underperformance.","68% overlap across 3 funds. You own HDFC Bank, Infosys, ICICI Bank three times in different wrappers.","Rs 41.7L in today's money is your 15-year corpus at flat SIP. Decide if that is enough."],action_items:[{priority:"URGENT",action:"Switch Axis Bluechip from Regular to Direct plan via MFCentral. No exit load. No tax. 10 minutes.",impact_inr:110000,deadline:"This month"},{priority:"URGENT",action:"Book Rs 1.25L LTCG from Parag Parikh before 31 March. Pay zero tax. Reinvest immediately.",impact_inr:125000,deadline:"31 March 2026"},{priority:"ADVISORY",action:"Switch Mirae Asset to UTI Nifty 50 Index Fund Direct. Exit cost Rs 730. Annual saving Rs 8,400.",impact_inr:426000,deadline:"April 2026"},{priority:"ADVISORY",action:"April step-up: +Rs 5,000 SIP + Rs 5,000 buffer when increment arrives. Set auto-debit.",impact_inr:374000,deadline:"April 2026"},{priority:"FYI",action:"Verify term insurance cover exceeds Rs 3 crore. Check policy document this week.",impact_inr:null,deadline:"This week"}],no_action_flag:false};}
+</script>
+</body>
+</html>
