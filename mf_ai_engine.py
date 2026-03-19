@@ -786,24 +786,119 @@ NON-NEGOTIABLE RULES
 #  Now defined once here and called by both.
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def build_sub_prompts(prompt: str) -> tuple:
+def build_portfolio_summary(portfolio: list) -> str:
+    """
+    Builds a compact portfolio summary string.
+    Used alongside full JSON to ensure AI always gets
+    correct totals even if JSON is trimmed.
+    """
+    total_invested = sum(f.get("invested_inr", 0) for f in portfolio)
+    total_current  = sum(f.get("current_value_inr", 0) for f in portfolio)
+    total_gain     = total_current - total_invested
+    gain_pct       = (total_gain / total_invested * 100) if total_invested > 0 else 0
+
+    lines = [
+        f"PORTFOLIO SUMMARY ({len(portfolio)} funds):",
+        f"  Total invested   : Rs {total_invested:,.0f}",
+        f"  Current value    : Rs {total_current:,.0f}",
+        f"  Absolute gain    : Rs {total_gain:,.0f} ({gain_pct:.1f}%)",
+        "",
+        "FUND-BY-FUND (all funds — do not ignore any):",
+    ]
+    for i, f in enumerate(portfolio, 1):
+        invested = f.get("invested_inr", 0)
+        current  = f.get("current_value_inr", 0)
+        gain     = current - invested
+        gain_p   = (gain / invested * 100) if invested > 0 else 0
+        lines.append(
+            f"  {i:2}. {f.get('fund_name','')[:45]}"
+            f" | Plan: {f.get('plan','?')}"
+            f" | Invested: Rs {invested:,.0f}"
+            f" | Current: Rs {current:,.0f}"
+            f" | Gain: {gain_p:.1f}%"
+            f" | Exit cost: Rs {f.get('total_exit_cost_inr', 0):,.0f}"
+            f" | SIP start: {f.get('sip_start_date','?')}"
+        )
+    return "\n".join(lines)
+
+
+def build_sub_prompts(prompt: str, portfolio: list = None) -> tuple:
     """
     Splits the master prompt into two focused sub-prompts.
+    Passes full portfolio summary + compressed JSON to ensure
+    all 14 funds reach the AI without truncation.
     Call 1: Portfolio quality + fund ratings + returns + costs
     Call 2: Strategy + projections + actions + telegram summary
     Returns (prompt_1, prompt_2) tuple.
     """
     today = datetime.date.today().isoformat()
 
+    # Extract context block from master prompt
     context_start = prompt.find("INVESTOR PROFILE")
-    context_end   = prompt.find("OUTPUT FORMAT") if "OUTPUT FORMAT" in prompt else len(prompt)
-    context_block = prompt[context_start:context_end].strip() if context_start != -1 else prompt[:4000]
+    context_end   = prompt.find("PORTFOLIO DATA")
+    investor_block = (
+        prompt[context_start:context_end].strip()
+        if context_start != -1 and context_end != -1
+        else prompt[:1500]
+    )
 
-    prompt_1 = f"""You are a brutally honest financial analyst. Analyse this investor's mutual fund portfolio.
+    # Build compact portfolio JSON — remove verbose fields to save space
+    compact_portfolio = []
+    if portfolio:
+        for f in portfolio:
+            compact_portfolio.append({
+                "fund_name":         f.get("fund_name", ""),
+                "isin":              f.get("isin", ""),
+                "category":          f.get("category", "Unknown"),
+                "plan":              f.get("plan", "direct"),
+                "invested_inr":      f.get("invested_inr", 0),
+                "current_value_inr": f.get("current_value_inr", 0),
+                "units":             f.get("units", 0),
+                "avg_nav":           f.get("avg_nav", 0),
+                "current_nav":       f.get("current_nav", 0),
+                "expense_ratio_pct": f.get("expense_ratio_pct", 0),
+                "exit_load_pct":     f.get("exit_load_pct", 1.0),
+                "sip_start_date":    f.get("sip_start_date", ""),
+                "total_exit_cost_inr": f.get("total_exit_cost_inr", 0),
+            })
 
-{context_block[:4000]}
+    portfolio_summary = build_portfolio_summary(portfolio) if portfolio else ""
+    portfolio_compact_json = json.dumps(compact_portfolio, indent=1)
 
-Return ONLY this JSON — no prose, no markdown fences:
+    # Extract exit costs and market context from prompt
+    exit_start  = prompt.find("EXIT COST ANALYSIS")
+    exit_end    = prompt.find("MARKET CONTEXT")
+    exit_block  = prompt[exit_start:exit_end].strip() if exit_start != -1 else ""
+
+    market_start = prompt.find("MARKET CONTEXT")
+    market_end   = prompt.find("PERSONAL RISK SCORE")
+    market_block = prompt[market_start:market_end].strip() if market_start != -1 else ""
+
+    risk_start = prompt.find("PERSONAL RISK SCORE")
+    risk_end   = prompt.find("SIP STEP-UP GUIDANCE")
+    risk_block = prompt[risk_start:risk_end].strip() if risk_start != -1 else ""
+
+    prompt_1 = f"""You are a brutally honest financial analyst. \
+Analyse this investor's complete mutual fund portfolio.
+
+CRITICAL: The investor has {len(portfolio) if portfolio else 'multiple'} funds. \
+Analyse ALL of them — do not skip or group any fund.
+
+{investor_block[:1200]}
+
+{portfolio_summary}
+
+FULL PORTFOLIO JSON (all {len(compact_portfolio)} funds):
+{portfolio_compact_json}
+
+{exit_block[:800]}
+
+{market_block[:600]}
+
+{risk_block[:400]}
+
+Return ONLY this JSON — no prose, no markdown fences. \
+Include a rating for EVERY fund listed above:
 
 {{
   "report_date": "{today}",
@@ -868,6 +963,8 @@ Return ONLY this JSON — no prose, no markdown fences:
 - Home loan rate 8.5% vs equity post-tax return 10.5%
 - Today: {today}
 
+{portfolio_summary}
+
 Return ONLY this JSON — no prose, no markdown fences:
 
 {{
@@ -914,11 +1011,10 @@ Return ONLY this JSON — no prose, no markdown fences:
   ],
   "no_action_flag": false,
   "no_action_reason": "",
-  "telegram_summary": "<100 word max. Score first. Fund verdicts. Top 2 actions. 15yr corpus. No emojis. Brutally direct.>"
+  "telegram_summary": "<100 word max. Score first. All fund verdicts. Top 2 actions. 15yr corpus. No emojis. Brutally direct.>"
 }}"""
 
     return prompt_1, prompt_2
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  SECTION 10.2 — JSON EXTRACTOR (global — fixed Bug 2 and Bug 4)
@@ -1058,7 +1154,7 @@ def call_openai_api(prompt: str) -> Optional[dict]:
         print("      [OpenAI] OPENAI_API_KEY not set — skipping")
         return None
 
-    prompt_1, prompt_2 = build_sub_prompts(prompt)
+    prompt_1, prompt_2 = build_sub_prompts(prompt, _portfolio_ref)
     url = "https://api.openai.com/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
