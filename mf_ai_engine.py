@@ -768,8 +768,8 @@ def call_gemini(p1: str, p2: str) -> Optional[dict]:
         print("      [Gemini] key not set — skipping")
         return None
 
-    # gemini-1.5-flash: better free tier limits than flash-lite
-    url  = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={key}"
+    # gemini-2.0-flash: better free tier limits than flash-lite
+    url  = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={key}"
     hdrs = {"Content-Type": "application/json"}
 
     def call(prompt: str, label: str) -> Optional[dict]:
