@@ -882,10 +882,12 @@ def build_sub_prompts(prompt: str, portfolio: list = None) -> tuple:
     risk_end   = prompt.find("SIP STEP-UP GUIDANCE")
     risk_block = prompt[risk_start:risk_end].strip() if risk_start != -1 else ""
 
+
     prompt_1 = f"""You are a brutally honest financial analyst. \
 Analyse this investor's complete mutual fund portfolio.
 
-CRITICAL: The investor has {len(portfolio) if portfolio else 'multiple'} funds. \
+CRITICAL: The investor has {len(portfolio) if portfolio else 'multiple'} funds. 
+BE CONCISE in fund_ratings — use short key names as shown. Every fund must appear.\
 Analyse ALL of them — do not skip or group any fund.
 
 {investor_block[:1200]}
@@ -915,21 +917,19 @@ Include a rating for EVERY fund listed above:
     "personal_risk": <float>,
     "behaviour_strategy": <float>
   }},
-  "fund_ratings": [
+ "fund_ratings": [
     {{
-      "fund_name": "<name>",
-      "score": <float 0-10>,
-      "verdict": "HOLD or WATCH or SWITCH or EXIT",
-      "1yr_cagr_pct": <float or null>,
-      "3yr_cagr_pct": <float or null>,
-      "alpha_vs_category": "<positive/negative/neutral>",
-      "expense_ratio_verdict": "<cheap/fair/expensive>",
-      "manager_risk": "<low/medium/high>",
-      "exit_cost_inr": <float>,
-      "net_switch_benefit_inr": <float or null>,
-      "key_finding": "<one brutal honest sentence>",
-      "action": "<specific action>"
-    }}
+    "n":"<fund_name>",
+    "s":<score>,
+    "v":"HOLD/WATCH/SWITCH/EXIT",
+    "c1":<1yr_cagr or null>,
+    "c3":<3yr_cagr or null>,
+    "a":"<pos/neg/neutral>",
+    "e":"<cheap/fair/expensive>",
+    "m":"<low/med/high>",
+    "x":<exit_cost_inr>,
+    "f":"<one brutal finding>",
+    "act":"<action>"}}
   ],
   "returns_analysis": {{
     "portfolio_xirr_pct": <float>,
@@ -1026,10 +1026,14 @@ Return ONLY this JSON — no prose, no markdown fences:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def extract_json_string(content: str) -> Optional[str]:
-    """Strips markdown fences and extracts clean JSON string from AI response."""
+    """
+    Strips markdown fences and extracts clean JSON string from AI response.
+    Also attempts to repair truncated JSON by closing open arrays/objects.
+    """
     if not content:
         return None
-    # Strip markdown code fences
+
+    # Strip markdown fences
     if "```" in content:
         for part in content.split("```"):
             p = part.strip()
@@ -1039,13 +1043,60 @@ def extract_json_string(content: str) -> Optional[str]:
             elif p.startswith("{"):
                 content = p
                 break
-    # Extract JSON boundaries
-    start = content.find("{")
-    end   = content.rfind("}") + 1
-    if start != -1 and end > start:
-        return content[start:end]
-    return None
 
+    # Find JSON boundaries
+    start = content.find("{")
+    if start == -1:
+        return None
+
+    # Try clean parse first
+    end = content.rfind("}") + 1
+    candidate = content[start:end]
+    try:
+        json.loads(candidate)
+        return candidate
+    except json.JSONDecodeError:
+        pass
+
+    # JSON is truncated — attempt repair
+    # Count open braces and brackets to close them
+    open_braces   = candidate.count("{") - candidate.count("}")
+    open_brackets = candidate.count("[") - candidate.count("]")
+
+    # Remove trailing incomplete token (partial string/number)
+    # Find the last complete value by trimming after last comma or colon
+    repair = candidate.rstrip()
+
+    # Remove trailing incomplete fragment
+    for bad_end in [",", ":", '"', "'"]:
+        while repair.endswith(bad_end) or (repair and repair[-1].isalpha()):
+            repair = repair[:-1].rstrip()
+
+    # Close open structures
+    repair += "]" * max(0, open_brackets)
+    repair += "}" * max(0, open_braces)
+
+    try:
+        json.loads(repair)
+        print(f"      [JSON repair] Truncated JSON repaired successfully")
+        return repair
+    except json.JSONDecodeError:
+        # Last resort: find last complete fund object and close cleanly
+        last_complete = repair.rfind("},")
+        if last_complete > start:
+            clean = repair[:last_complete + 1]
+            open_b = clean.count("{") - clean.count("}")
+            open_br = clean.count("[") - clean.count("]")
+            clean += "]" * max(0, open_br)
+            clean += "}" * max(0, open_b)
+            try:
+                json.loads(clean)
+                print(f"      [JSON repair] Partial JSON recovered up to last complete object")
+                return clean
+            except json.JSONDecodeError:
+                pass
+
+    return None
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  SECTION 10.3 — REPORT VALIDATOR
@@ -1137,7 +1188,10 @@ def _merge_sub_results(r1_str: str, r2_str: str, source: str) -> Optional[dict]:
     """Merges two JSON strings from split calls. Returns merged dict or None."""
     try:
         merged = {**json.loads(r1_str), **json.loads(r2_str)}
-        print(f"      [OK] Both calls merged successfully via {source}")
+        fund_count = len(merged.get("fund_ratings", []))
+        print(f"      [OK] Both calls merged via {source} | Funds rated: {fund_count}")
+        if fund_count < len(_portfolio_ref):
+            print(f"      [WARN] Only {fund_count}/{len(_portfolio_ref)} funds rated — response was truncated")
         return merged
     except json.JSONDecodeError as e:
         print(f"[ERROR] JSON merge failed ({source}): {e}")
@@ -1280,7 +1334,7 @@ def call_gemini_api(prompt: str) -> Optional[dict]:
     def call(sub_prompt: str, label: str) -> Optional[str]:
         payload = {
             "contents": [{"parts": [{"text": sub_prompt}]}],
-            "generationConfig": {"temperature": 0.2, "maxOutputTokens": 4096},
+            "generationConfig": {"temperature": 0.2, "maxOutputTokens": 8192},
             "systemInstruction": {"parts": [{"text": SYSTEM_INSTRUCTION}]},
         }
         resp = _post_with_retry(url, payload, headers, f"Gemini {label}")
