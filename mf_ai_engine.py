@@ -1145,8 +1145,7 @@ def _merge_sub_results(r1_str: str, r2_str: str, source: str) -> Optional[dict]:
         print(f"  Call 2 snippet: {r2_str[:200]}")
         return None
 
-    # Access portfolio reference set by main()
-    global _portfolio_ref
+   
     
 # ── PRIMARY: OpenAI GPT-4o-mini ──────────────────────────────────────────────
 
@@ -1732,7 +1731,7 @@ def fetch_zerodha_portfolio() -> Optional[list]:
               f"{len(order_dates)} order dates resolved")
               
         
-        print(f"[OK] Fetched {len(portfolio)} holdings from Zerodha")
+    
         return portfolio if portfolio else None
 
     except Exception as e:
@@ -1846,7 +1845,7 @@ def main():
 
     # Step 3 — Exit costs
     print("[3/8] Calculating exit costs...")
-  exit_costs = []
+    exit_costs = []
     for fund in portfolio:
         cost = calculate_exit_cost(fund, INVESTOR_PROFILE)
         exit_costs.append(cost)
@@ -1879,7 +1878,7 @@ def main():
 
     # Make portfolio available to AI callers for sub-prompt building
     global _portfolio_ref
-        _portfolio_ref = portfolio
+    _portfolio_ref = portfolio
     # Step 8 — AI synthesis: OpenAI → Groq → Gemini
     print("[8/8] Running AI analysis...")
     prompt = build_master_prompt(
